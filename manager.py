@@ -17,10 +17,10 @@ class DataManager:
         self._init_folders()
 
     def _init_folders(self):
-        """AI自动创建数据集目录结构"""
-        for step in ["step_1_skeleton", "step_2_sketch", "step_3_lineart", "step_4_color", "step_5_finish"]:
-            (self.train_dir / step).mkdir(parents=True, exist_ok=True)
-            (self.pending_dir / step).mkdir(parents=True, exist_ok=True)
+        """AI自动创建数据集目录结构（目录名由 Config.PIPELINE_STEPS 驱动）"""
+        for step in Config.PIPELINE_STEPS:
+            (self.train_dir / step["name"]).mkdir(parents=True, exist_ok=True)
+            (self.pending_dir / step["name"]).mkdir(parents=True, exist_ok=True)
         self.reject_dir.mkdir(parents=True, exist_ok=True)
 
     def save_pending(self, image, step_name, metadata):
