@@ -1,274 +1,344 @@
 # nonebot_plugin_ai_trainer
 
-一个用于 **AI 绘画训练数据采集** 的 NoneBot2 插件，采用"人在回路（Human-in-the-Loop）"工作流。  
-插件通过定时任务自动生成候选图片，并以私聊消息的形式推送给超级用户，由用户通过交互命令审核标注，被批准的图片将自动保存为标准训练数据集。
+一个基于 NoneBot2 的 **AI 绘画训练数据采集插件**，采用「人在回路（Human-in-the-Loop）」工作流。
+
+插件通过定时任务自动生成图片，以 **4 阶段流水线**（构图 → 线稿 → 上色 → 光影）逐步精修，每个阶段结束后等待用户评分（1-5 分）。低分（1-2 分）触发重做，高分（3-5 分）归档并推进下一阶段。所有数据自动整理为 HuggingFace `datasets` 兼容格式，为后续强化学习（RL）奠定数据基础。
+
+---
+
+## 整体流程
+
+```
+定时任务 / /画画 命令
+         ↓
+  阶段1：构图（骨架/定位线）
+         ↓ 发送给用户
+  用户评分 1-5
+  ├─ 1-2分 → 重新生成本阶段
+  └─ 3-5分 → 归档 → 阶段2：线稿细化
+                         ↓ 发送给用户
+                   用户评分 1-5
+                   ├─ 1-2分 → 重新生成本阶段
+                   └─ 3-5分 → 归档 → 阶段3：上色
+                                          ↓ ...
+                                    阶段4：光影完稿
+                                          ↓
+                                    🎉 流水线完成
+```
 
 ---
 
 ## 安装
 
-### 依赖
-
-| 包名 | 说明 |
-|------|------|
-| `torch` | PyTorch 深度学习框架 |
-| `diffusers` | Hugging Face 扩散模型库 |
-| `controlnet_aux` | ControlNet 预处理器集合 |
-| `Pillow` | 图像处理 |
-| `nonebot-plugin-apscheduler` | NoneBot2 定时任务支持 |
+### 1. 安装依赖
 
 ```bash
-pip install torch diffusers controlnet_aux Pillow nonebot-plugin-apscheduler
+# PyTorch（根据你的 CUDA 版本选择，以 CUDA 12.1 为例）
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+
+# 其他依赖
+pip install diffusers transformers accelerate controlnet_aux Pillow nonebot-plugin-apscheduler
 ```
 
-> **注意：** 首次运行时插件会自动从 Hugging Face 下载模型权重，视网络环境可能需要较长时间，请耐心等待。
+> **CUDA 版本对照**：访问 https://pytorch.org/get-started/locally/ 选择适合你系统的安装命令。
+
+### 2. 加载插件
+
+在你的 NoneBot2 项目的 `pyproject.toml` 或 `bot.py` 中加载插件：
+
+```toml
+# pyproject.toml
+[tool.nonebot]
+plugins = ["nonebot_plugin_ai_trainer"]
+```
+
+或在 `bot.py` 中：
+
+```python
+nonebot.load_plugin("nonebot_plugin_ai_trainer")
+```
 
 ---
 
 ## 配置
 
-所有配置项均位于 `nonebot_plugin_ai_trainer/config.py`：
+所有配置项均位于 `nonebot_plugin_ai_trainer/config.py`，无需修改 `.env` 文件。
+
+### 必须修改的配置
+
+打开 `config.py`，找到以下行并替换为你的 QQ 号：
+
+```python
+SUPERUSER_ID: str = "123456789"  # ← 改为你的真实 QQ 号
+```
+
+### 完整配置说明
 
 ```python
 class Config:
-    # !! 必须修改：请替换为你的实际 QQ 号，否则机器人无法私聊你 !!
-    SUPERUSER_ID = "YOUR_QQ_ID_HERE"
+    # !! 必须修改 !!
+    SUPERUSER_ID: str = "123456789"
 
-    # 数据路径
-    BASE_DATA_PATH = "data/ai_trainer"
+    # 定时任务时间窗口（24 小时制）
+    SCHEDULE_START_HOUR: int = 8   # 上午 8 点开始
+    SCHEDULE_END_HOUR: int = 23    # 晚上 11 点结束
 
-    # 生成图片的分辨率
-    IMAGE_WIDTH = 512
-    IMAGE_HEIGHT = 512
+    # HuggingFace 镜像（True = 使用国内 hf-mirror.com，解决大陆访问问题）
+    HF_MIRROR: bool = True
 
-    # 模型 ID（SD 1.5 系列）
-    SD_MODEL_ID = "runwayml/stable-diffusion-v1-5"
-    CONTROLNET_MODEL_ID = "lllyasviel/sd-controlnet-openpose"
+    # 模型（首次启动自动下载，约 5-8 GB）
+    SD_MODEL_ID: str = "runwayml/stable-diffusion-v1-5"
+    OPENPOSE_CONTROLNET_ID: str = "lllyasviel/sd-controlnet-openpose"
+    CANNY_CONTROLNET_ID: str = "lllyasviel/sd-controlnet-canny"
 
-    # 定时任务设置
-    SCHEDULER_INTERVAL_MINUTES = 120  # 每隔多少分钟生成一次
-    SCHEDULER_START_HOUR = 8          # 任务允许运行的起始小时（含）
-    SCHEDULER_END_HOUR = 23           # 任务允许运行的结束小时（含）
+    # 手动下载后的本地路径（留空 = 自动从网络下载）
+    LOCAL_SD_PATH: str = ""
+    LOCAL_OPENPOSE_PATH: str = ""
+    LOCAL_CANNY_PATH: str = ""
 
-    # 主题描述词池（每次触发随机选取一条，自动分解为各步骤 prompt）
-    SUBJECT_POOL = [
+    # 图像分辨率
+    IMAGE_WIDTH: int = 512
+    IMAGE_HEIGHT: int = 512
+
+    # 数据存储根目录
+    BASE_DATA_PATH: str = "data/ai_trainer"
+
+    # 主题描述词池（每次触发随机选取一条）
+    SUBJECT_POOL: list = [
         "1girl, long blue hair, maid outfit, smiling, indoor cafe background, anime style",
-        # 可按需增删条目…
+        # 可按需增删...
     ]
 ```
 
-### 关键配置说明
-
 | 配置项 | 说明 |
 |--------|------|
-| `SUPERUSER_ID` | **必须修改**。填入你自己的 QQ 号，机器人会将生成的图片私聊发给你。 |
-| `SCHEDULER_START_HOUR` | 定时任务允许运行的最早小时（24 小时制，默认 `8`，即上午 8 点）。 |
-| `SCHEDULER_END_HOUR` | 定时任务允许运行的最晚小时（24 小时制，默认 `23`，即晚上 11 点）。 |
-| `SCHEDULER_INTERVAL_MINUTES` | 相邻两次完整流水线的间隔分钟数（默认 `120`，即 2 小时）。 |
-| `SD_MODEL_ID` | Stable Diffusion 1.5 基础模型 ID，可在 [Hugging Face](https://huggingface.co/models?pipeline_tag=text-to-image) 搜索同架构模型进行替换。 |
-| `CONTROLNET_MODEL_ID` | ControlNet 模型 ID，默认使用 OpenPose 姿态控制模型。 |
-| `LOCAL_MODEL_PATH` | SD 模型的**本地目录路径**。填写后直接从磁盘加载，完全跳过网络下载。留空则使用 `SD_MODEL_ID` 自动下载。 |
-| `LOCAL_CONTROLNET_PATH` | ControlNet 模型的**本地目录路径**。含义同上。 |
-| `SUBJECT_POOL` | **主题描述词池**。每条描述代表一幅完整成品图的要求，系统会自动将其分解到各绘画步骤的 prompt 中。可按需增删条目。 |
-| `PIPELINE_STEPS` | 绘画流水线步骤定义（高级）。默认内置 8 步，一般无需修改；如需调整各步骤的提示词模板或 ControlNet 权重，可直接编辑该列表。 |
+| `SUPERUSER_ID` | **必须修改**。填入你自己的 QQ 号，机器人会把生成图片以私信发给你。 |
+| `SCHEDULE_START_HOUR` | 定时任务最早触发时间（默认 `8`，即上午 8 点）。 |
+| `SCHEDULE_END_HOUR` | 定时任务最晚触发时间（默认 `23`，即晚上 11 点，不会深夜打扰）。 |
+| `HF_MIRROR` | 设为 `True` 时使用 `hf-mirror.com` 镜像站，解决大陆下载问题（**推荐开启**）。 |
+| `LOCAL_SD_PATH` | SD 1.5 模型的本地目录路径。填写后完全离线加载，跳过网络下载。 |
+| `LOCAL_OPENPOSE_PATH` | OpenPose ControlNet 模型的本地目录路径。 |
+| `LOCAL_CANNY_PATH` | Canny ControlNet 模型的本地目录路径。 |
+| `SUBJECT_POOL` | 主题描述词池。每条描述代表一幅完整成品图的创作要求，系统自动分解到各阶段 prompt 中。 |
+| `PIPELINE_STAGES` | 四阶段流水线定义（高级）。一般无需修改，如需调整各阶段的 prompt 模板或 ControlNet 权重，可直接编辑。 |
 
 ---
 
 ## 使用指南
 
-### 绘画流水线（8 步骤）
+### 自动训练模式（定时任务）
 
-每幅完整插图由以下 8 个步骤依次完成，每步的输出图像作为下一步的 ControlNet 条件输入：
+启动 NoneBot2 后，插件会在每天 **上午 8 点到晚上 11 点**之间，每隔 **3 小时**自动触发一次绘画流水线，无需任何手动操作。
 
-| 步骤 | 名称 | 说明 |
-|------|------|------|
-| 1 | `step_1_skeleton` | 最简易骨架/定位线草图：确定人物位置、姿势、视角 |
-| 2 | `step_2_rough_sketch` | 外貌/背景轮廓草图：发型、服装外轮廓、背景要素 |
-| 3 | `step_3_detailed_sketch` | 细化草图：丰富细节，为线稿做准备 |
-| 4 | `step_4_lineart` | 高完成度线稿：精确干净的墨线 |
-| 5 | `step_5_base_color` | 上大块底色：平铺主色调 |
-| 6 | `step_6_refined_color` | 细化色块：补充小范围颜色 |
-| 7 | `step_7_color_blend` | 调色：减弱色块感，增强均匀感 |
-| 8 | `step_8_lighting` | 添加光影效果：完稿 |
+**工作流程：**
 
-**无需手动为每个步骤编写 prompt**——只需在 `SUBJECT_POOL` 中描述最终成品图的要求（如 `"1girl, blue hair, maid outfit, indoor cafe, anime style"`），系统会自动将其注入到各步骤的提示词模板中。
+1. 机器人从 `SUBJECT_POOL` 随机选取一条主题描述。
+2. 生成**阶段 1（构图）** 图片，以私信形式发送给你。
+3. 你**引用（回复）**该图片并发送评分（1-5 分）。
+4. 根据评分：
+   - **1-2 分** → 机器人重新生成本阶段（使用新随机种子）。
+   - **3-5 分** → 机器人归档图片并自动生成**阶段 2（线稿）**。
+5. 重复步骤 3-4，直到全部 4 个阶段完成。
 
-### 自动训练（定时任务）
+**私信示例：**
 
-插件启动后会按 `SCHEDULER_INTERVAL_MINUTES` 设定的间隔自动触发，**仅在 `SCHEDULER_START_HOUR`（含）到 `SCHEDULER_END_HOUR`（含）之间运行**（默认 8:00–23:00），不会在深夜打扰你。
-
-每次触发时，机器人会：
-1. 从 `SUBJECT_POOL` 随机选取一条主题描述（最终成品图要求）。
-2. 依次执行全部 8 个绘画步骤，每步用上一步的结果作为 ControlNet 条件输入。
-3. 将每个步骤的生成图以私聊消息的形式推送给 `SUPERUSER_ID` 指定的用户（共 8 条消息）。
-
-收到图片后，**引用（回复）该图片消息**并发送以下命令进行标注：
-
-| 命令 | 别名 | 效果 |
-|------|------|------|
-| `ok` | `不错`、`保存` | ✅ 批准并归档至训练集，自动追加 `metadata.jsonl` |
-| `pass` | `不行`、`丢弃` | 🗑️ 拒绝，图片移入 rejected 目录 |
-
-> **注意：** 必须以**引用回复**的方式操作，直接发送命令无效。
-
-示例流程：
 ```
-[机器人私聊]
-[碎片时间标注] 第一草图（骨架/定位线） (1/8)
-主题: 1girl, blue hair, maid outfit, smiling, indoor cafe background, anime style
-步骤: step_1_skeleton
-Prompt: simple body skeleton, rough position lines, pose composition, 1girl, blue hair …
+[AI训练师] 阶段1：构图（骨架/定位线） (1/4)
+主题：1girl, long blue hair, maid outfit, smiling, indoor cafe background, anime style
+Prompt：simple body skeleton, rough position lines, pose composition, 1girl, long blue hair...
+
+请引用本条消息回复评分（1-5 分）：
+  1-2 分 → 重新生成本阶段
+  3-5 分 → 归档并进入下一阶段
+也可直接回复 ok（相当于5分）或 pass（相当于1分）
 [图片]
-回复 [ok] 归档，回复 [pass] 丢弃
 
-… (2/8 到 8/8 同理) …
+你的回复：引用上图，发送 "4"
 
-[用户引用第4张图（线稿）回复]
-ok
-
-[机器人回复]
-✅ 已归档至 step_4_lineart，样本库+1
+机器人回复：✅ 4 分，已归档至 stage_1_composition，样本库 +1 📁
+（随即发送阶段2图片）
 ```
 
-### 手动绘画
+### 手动触发（/画画）
 
-通过以下命令手动触发 AI 绘画并进行交互式精修：
+你可以随时私聊机器人，手动触发一次完整的 4 阶段流水线：
 
 ```
-/画画 [prompt]
-/绘画 [prompt]
+/画画 [主题描述（可选）]
 ```
 
-例如：
+**示例：**
+
 ```
-/画画 1girl, blue hair, anime style, clean lineart
+# 指定主题
+/画画 1girl, silver hair, gothic lolita outfit, rainy street background, anime style
+
+# 不指定主题（随机从 SUBJECT_POOL 选取）
+/画画
 ```
 
-交互式精修选项：
+### 命令速查表
 
-| 回复 | 效果 |
-|------|------|
-| `1` | ✅ 满意，进入下一步骤 |
-| `2` | 🔄 重新生成（使用新随机种子） |
-| `3` | 🎨 精修（保留本次种子，微调参数后重绘） |
+| 命令 | 别名 | 使用方式 | 效果 |
+|------|------|----------|------|
+| `1` ~ `5` | — | 引用回复机器人图片 | 按分数处理：1-2分重做，3-5分归档并推进 |
+| `ok` | `保存`、`不错` | 引用回复机器人图片 | 相当于 5 分，归档并推进 |
+| `pass` | `丢弃`、`不行` | 引用回复机器人图片 | 相当于 1 分，丢弃并重做 |
+| `/paint` | `/画画`、`/绘画` | 直接发送（可附主题描述） | 手动触发一次完整流水线 |
+
+> ⚠️ **注意**：`1`~`5`、`ok`、`pass` 命令必须以**引用回复**的方式使用，直接发送无效。
+
+---
+
+## 四阶段流水线详解
+
+| 阶段 | 名称 | ControlNet | 说明 |
+|------|------|-----------|------|
+| 1 | `stage_1_composition` | 无（纯 txt2img） | 生成人体骨架/定位线草图，确定姿势和构图 |
+| 2 | `stage_2_lineart` | Canny（权重 0.8） | 以阶段 1 为参考，生成精细线稿 |
+| 3 | `stage_3_coloring` | Canny（权重 0.6） | 以阶段 2 为参考，添加平面上色 |
+| 4 | `stage_4_lighting` | Canny（权重 0.4） | 以阶段 3 为参考，添加光影效果，完成创作 |
 
 ---
 
 ## 数据输出
 
-所有数据存放在 `data/ai_trainer/` 目录下：
+所有训练数据存放在 `data/ai_trainer/` 目录下：
 
 ```
 data/ai_trainer/
-├── pending/                    # 待审核图片（临时目录）
-│   ├── step_1_skeleton/
-│   ├── step_2_rough_sketch/
-│   ├── step_3_detailed_sketch/
-│   ├── step_4_lineart/
-│   ├── step_5_base_color/
-│   ├── step_6_refined_color/
-│   ├── step_7_color_blend/
-│   └── step_8_lighting/
-├── train/                      # 已批准的训练数据
-│   ├── step_1_skeleton/
-│   ├── step_2_rough_sketch/
-│   ├── step_3_detailed_sketch/
-│   ├── step_4_lineart/
-│   ├── step_5_base_color/
-│   ├── step_6_refined_color/
-│   ├── step_7_color_blend/
-│   ├── step_8_lighting/
-│   └── metadata.jsonl          # HuggingFace 兼容格式元数据
-└── rejected/                   # 已拒绝的图片
+├── pending/                    # 待审核图片（临时）
+│   ├── stage_1_composition/
+│   ├── stage_2_lineart/
+│   ├── stage_3_coloring/
+│   └── stage_4_lighting/
+├── train/                      # 已批准的训练数据 ✅
+│   ├── stage_1_composition/
+│   ├── stage_2_lineart/
+│   ├── stage_3_coloring/
+│   ├── stage_4_lighting/
+│   └── metadata.jsonl          # HuggingFace datasets 兼容格式
+└── rejected/                   # 已拒绝的图片（低分重做后产生）
 ```
 
 ### `metadata.jsonl` 格式
 
-每条记录为一行 JSON，兼容 HuggingFace `datasets` 库直接加载：
+每条记录为一行 JSON，可直接用 `datasets` 库加载：
 
 ```jsonl
-{"file_name": "step_4_lineart/1718000000_123456789.png", "text": "clean ink lineart, precise clean lines, 1girl, blue hair …", "seed": 123456789, "control_params": {}}
-{"file_name": "step_8_lighting/1718003600_987654321.png", "text": "lighting and shadows, highlights, rim light, shading, 1girl, blue hair …", "seed": 987654321, "control_params": {}}
+{"file_name": "stage_2_lineart/1718000000_123456789.png", "text": "clean ink lineart, ...", "seed": 123456789, "stage": "stage_2_lineart", "subject": "1girl, blue hair...", "rating": 4, "control_params": {}}
 ```
+
+**加载示例：**
+
+```python
+from datasets import load_dataset
+ds = load_dataset("imagefolder", data_dir="data/ai_trainer/train")
+```
+
+---
+
+## 首次启动：模型下载
+
+首次运行时，插件会**自动**从 HuggingFace 下载以下模型（合计约 7-9 GB）：
+
+| 模型 | 大小 | 用途 |
+|------|------|------|
+| `runwayml/stable-diffusion-v1-5` | ~4 GB | 图像生成基础模型 |
+| `lllyasviel/sd-controlnet-openpose` | ~1.5 GB | 阶段 1 构图控制 |
+| `lllyasviel/sd-controlnet-canny` | ~1.5 GB | 阶段 2-4 精修控制 |
+
+下载完成后模型会缓存至本地（通常在 `~/.cache/huggingface/hub/`），后续启动**不会重复下载**。
+
+插件内置了以下下载加速策略（**无需手动配置**）：
+
+1. **首选 hf-mirror.com 镜像站**：设置 `HF_MIRROR = True`（默认），自动使用国内镜像加速。
+2. **自动切换端点**：镜像站失败时，自动重试官方源（带指数退避重试机制）。
+
+### 手动下载模型（网络受限时）
+
+如果自动下载仍然失败，可手动下载后配置本地路径：
+
+#### 方法一：huggingface-cli（推荐）
+
+```bash
+pip install -U huggingface_hub
+
+# 下载 SD 1.5（约 4 GB）
+HF_ENDPOINT=https://hf-mirror.com huggingface-cli download \
+    runwayml/stable-diffusion-v1-5 \
+    --local-dir models/stable-diffusion-v1-5
+
+# 下载 ControlNet OpenPose（约 1.5 GB）
+HF_ENDPOINT=https://hf-mirror.com huggingface-cli download \
+    lllyasviel/sd-controlnet-openpose \
+    --local-dir models/sd-controlnet-openpose
+
+# 下载 ControlNet Canny（约 1.5 GB）
+HF_ENDPOINT=https://hf-mirror.com huggingface-cli download \
+    lllyasviel/sd-controlnet-canny \
+    --local-dir models/sd-controlnet-canny
+```
+
+> **Windows 用户（PowerShell）：**
+> ```powershell
+> $env:HF_ENDPOINT = "https://hf-mirror.com"
+> huggingface-cli download runwayml/stable-diffusion-v1-5 --local-dir models/stable-diffusion-v1-5
+> huggingface-cli download lllyasviel/sd-controlnet-openpose --local-dir models/sd-controlnet-openpose
+> huggingface-cli download lllyasviel/sd-controlnet-canny --local-dir models/sd-controlnet-canny
+> ```
+
+#### 方法二：hfd.sh 脚本（多线程，速度最快）
+
+```bash
+# 下载脚本
+wget https://hf-mirror.com/hfd/hfd.sh
+chmod a+x hfd.sh
+
+# 多线程下载（-x 4 表示 4 个线程）
+./hfd.sh runwayml/stable-diffusion-v1-5 --tool aria2c -x 4
+./hfd.sh lllyasviel/sd-controlnet-openpose --tool aria2c -x 4
+./hfd.sh lllyasviel/sd-controlnet-canny --tool aria2c -x 4
+```
+
+#### 配置本地路径
+
+下载完成后，在 `config.py` 中填写本地路径：
+
+```python
+LOCAL_SD_PATH = "models/stable-diffusion-v1-5"
+LOCAL_OPENPOSE_PATH = "models/sd-controlnet-openpose"
+LOCAL_CANNY_PATH = "models/sd-controlnet-canny"
+```
+
+填写后重启机器人，插件将**完全离线**加载模型，无需任何网络连接。
+
+---
+
+## 硬件要求
+
+| 配置 | 显存 | 说明 |
+|------|------|------|
+| 最低可运行 | 4-6 GB | 开启 CPU Offload，速度较慢（每张图约 2-5 分钟） |
+| 推荐配置 | **16 GB** | 流畅运行，每张图约 30-60 秒 |
+
+插件默认调用 `pipeline.enable_model_cpu_offload()`，将模型子组件（UNet、VAE、文本编码器）按需在 CPU 与 GPU 之间调度，4-6 GB 显存的显卡也可运行，但速度会明显慢于 16 GB 配置。
 
 ---
 
 ## 常见问题
 
-### 首次启动时机器人长时间无响应
+**Q：首次启动机器人长时间无响应？**  
+A：正在下载 7-9 GB 的模型文件。请耐心等待，日志中会打印下载进度。可以观察 `~/.cache/huggingface/hub/` 目录的增长情况。
 
-首次运行时，插件会自动从 Hugging Face Hub 下载 Stable Diffusion 1.5 及 ControlNet 模型权重（合计约 **5–8 GB**），视网络环境可能需要数分钟至数十分钟。下载完成后模型会缓存至本地，后续启动不会重复下载。
+**Q：下载失败，提示网络错误？**  
+A：请参照【手动下载模型】章节，先手动下载后配置本地路径。
 
-插件会依次尝试以下下载策略，无需任何手动配置：
+**Q：评分命令没有响应？**  
+A：请确认你是以**引用回复**的方式发送评分（长按消息 → 引用 → 发送数字），而不是直接发送数字。
 
-1. **hf-mirror.com 镜像站**（每个端点最多重试 3 次，带退避等待）
-2. **huggingface.co 官方站**（同样重试 3 次）
+**Q：想修改流水线步骤的 prompt？**  
+A：编辑 `config.py` 中的 `PIPELINE_STAGES` 列表，修改对应阶段的 `prompt_template`。`{subject}` 占位符会在运行时被替换为本次选取的主题描述。
 
-若两个端点均失败，会在日志中打印明确的错误信息并指引手动下载。
-
----
-
-### 手动下载模型（网络受限时）
-
-如果自动下载仍然失败，可以通过以下任一方式手动下载模型，并在 `config.py` 中配置本地路径。
-
-#### 方法一：使用 huggingface-cli（推荐）
-
-```bash
-pip install -U huggingface_hub
-
-# 下载 SD 1.5 基础模型（约 4 GB）
-HF_ENDPOINT=https://hf-mirror.com huggingface-cli download \
-    runwayml/stable-diffusion-v1-5 \
-    --local-dir models/stable-diffusion-v1-5
-
-# 下载 ControlNet OpenPose 模型（约 1.5 GB）
-HF_ENDPOINT=https://hf-mirror.com huggingface-cli download \
-    lllyasviel/sd-controlnet-openpose \
-    --local-dir models/sd-controlnet-openpose
-```
-
-> **Windows 用户：** PowerShell 中使用以下等效命令：
-> ```powershell
-> $env:HF_ENDPOINT = "https://hf-mirror.com"
-> huggingface-cli download runwayml/stable-diffusion-v1-5 --local-dir models/stable-diffusion-v1-5
-> huggingface-cli download lllyasviel/sd-controlnet-openpose --local-dir models/sd-controlnet-openpose
-> ```
-> 或在 CMD 中：
-> ```cmd
-> set HF_ENDPOINT=https://hf-mirror.com
-> huggingface-cli download runwayml/stable-diffusion-v1-5 --local-dir models/stable-diffusion-v1-5
-> huggingface-cli download lllyasviel/sd-controlnet-openpose --local-dir models/sd-controlnet-openpose
-> ```
-
-#### 方法二：使用 git-lfs
-
-```bash
-# 前提：已安装 Git LFS（https://git-lfs.github.com）
-git lfs install
-
-# 克隆镜像仓库
-git clone https://hf-mirror.com/runwayml/stable-diffusion-v1-5 models/stable-diffusion-v1-5
-git clone https://hf-mirror.com/lllyasviel/sd-controlnet-openpose models/sd-controlnet-openpose
-```
-
-#### 配置本地路径
-
-将下载好的模型目录路径填入 `config.py`：
-
-```python
-# 支持绝对路径和相对路径（相对于机器人运行目录）
-LOCAL_MODEL_PATH = "models/stable-diffusion-v1-5"
-LOCAL_CONTROLNET_PATH = "models/sd-controlnet-openpose"
-```
-
-填写后重启机器人，插件将直接从本地磁盘加载，完全绕过网络。
-
-### 显存要求
-
-| 配置 | 说明 |
-|------|------|
-| 最低可运行 | 约 4–6 GB 显存（纯推理，模型分块加载） |
-| 推荐配置 | **16 GB 显存**（流畅运行，无性能瓶颈） |
-
-插件在 `engine.py` 中默认调用 `pipeline.enable_model_cpu_offload()`，将 UNet、VAE、文本编码器等子组件按需在 CPU 与 GPU 之间调度，避免模型常驻显存。这使得 4–6 GB 显存的显卡也能运行，但每次推理都有额外的 CPU↔GPU 数据迁移开销，速度较慢。**推荐使用 16 GB 显存**，可在单次推理中将主要组件常驻 GPU，显著提升生成速度。
+**Q：如何增加主题描述？**  
+A：在 `config.py` 的 `SUBJECT_POOL` 列表中添加新条目即可。
