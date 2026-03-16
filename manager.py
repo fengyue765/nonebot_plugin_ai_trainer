@@ -5,8 +5,11 @@ import shutil
 from datetime import datetime
 from pathlib import Path
 
+from .config import Config
+
+
 class DataManager:
-    def __init__(self, base_path="data/ai_trainer"):
+    def __init__(self, base_path: str = Config.BASE_DATA_PATH):
         self.base_path = Path(base_path)
         self.pending_dir = self.base_path / "pending"
         self.train_dir = self.base_path / "train"

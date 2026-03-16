@@ -1,56 +1,83 @@
 # scheduler.py
-from nonebot import require, get_bot
-from nonebot.adapters.onebot.v11 import MessageSegment
-require("nonebot_plugin_apscheduler")
-from nonebot_plugin_apscheduler import scheduler
-from .engine import engine
-from .manager import data_manager
+import io
 import random
 import asyncio
+from datetime import datetime
 
-# 全局待审核队列: { "uuid_msg_id": "pending_file_path" }
+from nonebot import require, get_bot
+from nonebot.adapters.onebot.v11 import MessageSegment
+
+require("nonebot_plugin_apscheduler")
+from nonebot_plugin_apscheduler import scheduler
+
+from .config import Config
+from .engine import engine
+from .manager import data_manager
+
+# 全局待审核队列: { "msg_id": "pending_file_path" }
 review_queue = {}
 
-# 定时任务：每 60 分钟自动生成一张图
-@scheduler.scheduled_job("interval", minutes=60, id="auto_paint")
-async def auto_generate_task():
+# 候选训练任务列表
+_TASKS = [
+    {"name": "step_1_skeleton", "prompt": "dynamic pose, fighting stance, anime style"},
+    {"name": "step_1_skeleton", "prompt": "sitting pose, relaxed, anime style"},
+    {"name": "step_2_sketch",   "prompt": "rough sketch, messy lines, 1girl, standing"},
+    {"name": "step_2_sketch",   "prompt": "rough sketch, 1boy, running pose"},
+    {"name": "step_3_lineart",  "prompt": "clean lineart, 1girl, detailed clothing"},
+    {"name": "step_4_color",    "prompt": "flat color, anime, 1girl, blue hair"},
+]
+
+
+# 定时任务：每 120 分钟（2 小时）触发一次
+@scheduler.scheduled_job(
+    "interval",
+    minutes=Config.SCHEDULER_INTERVAL_MINUTES,
+    id="auto_paint",
+)
+async def auto_generate_task() -> None:
+    """碎片时间标注任务：自动生成图片并私聊超级用户审核。
+
+    只在每天 ``Config.SCHEDULER_START_HOUR`` 至
+    ``Config.SCHEDULER_END_HOUR``（含）之间执行，避免深夜打扰。
+    """
+    now = datetime.now()
+    if not (Config.SCHEDULER_START_HOUR <= now.hour <= Config.SCHEDULER_END_HOUR):
+        return
+
     bot = get_bot()
-    # 请填入你的 QQ 号，让机器人只私聊你
-    SUPERUSER_ID = "123456789" 
-    
+
     # 1. 随机挑选一个训练任务
-    # 为了演示，我们随机选一个步骤和Prompt
-    steps = [
-        {"name": "step_1_skeleton", "prompt": "dynamic pose, fighting stance"},
-        {"name": "step_2_sketch", "prompt": "rough sketch, messy lines, 1girl, sitting"},
-    ]
-    task = random.choice(steps)
-    
-    # 2. 调用引擎生成 (异步)
-    # 注意：engine 需要适配 generate_image 单独方法
-    print(f"后台自动生成任务: {task['name']}")
-    image, seed = await asyncio.to_thread(engine.generate_single, task["prompt"])
-    
+    task = random.choice(_TASKS)
+    print(f"[ai_trainer] 后台自动生成任务: {task['name']} | prompt: {task['prompt']}")
+
+    # 2. 在线程池中调用引擎（避免阻塞事件循环）
+    image, seed = await asyncio.to_thread(
+        engine.generate_single, task["prompt"], task["name"]
+    )
+
     # 3. 保存到 Pending 区
     meta = {"prompt": task["prompt"], "seed": seed, "source": "auto_scheduler"}
     file_path = data_manager.save_pending(image, task["name"], meta)
-    
-    # 4. 推送给用户
-    import io
+
+    # 4. 将图片编码为字节流后推送给超级用户
     img_byte = io.BytesIO()
-    image.save(img_byte, format='PNG')
-    
+    image.save(img_byte, format="PNG")
+
     try:
         msg = (
-            MessageSegment.text(f"[碎片时间标注]\n任务: {task['name']}\nPrompt: {task['prompt']}\n") + 
-            MessageSegment.image(img_byte.getvalue()) +
-            MessageSegment.text("\n回复 [ok] 归档，回复 [pass] 丢弃")
+            MessageSegment.text(
+                f"[碎片时间标注]\n任务: {task['name']}\nPrompt: {task['prompt']}\n"
+            )
+            + MessageSegment.image(img_byte.getvalue())
+            + MessageSegment.text("\n回复 [ok] 归档，回复 [pass] 丢弃")
         )
-        sent = await bot.send_private_msg(user_id=int(SUPERUSER_ID), message=msg)
-        
-        # 记录消息ID，以便后续引用回复
-        msg_id = str(sent['message_id'])
+        sent = await bot.send_private_msg(
+            user_id=int(Config.SUPERUSER_ID), message=msg
+        )
+
+        # 记录消息 ID，供后续引用回复时查找
+        msg_id = str(sent["message_id"])
         review_queue[msg_id] = file_path
-        
+
     except Exception as e:
-        print(f"推送失败: {e}")
+        print(f"[ai_trainer] 推送失败: {e}")
