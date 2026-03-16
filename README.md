@@ -49,6 +49,12 @@ class Config:
     SCHEDULER_INTERVAL_MINUTES = 120  # 每隔多少分钟生成一次
     SCHEDULER_START_HOUR = 8          # 任务允许运行的起始小时（含）
     SCHEDULER_END_HOUR = 23           # 任务允许运行的结束小时（含）
+
+    # 主题描述词池（每次触发随机选取一条，自动分解为各步骤 prompt）
+    SUBJECT_POOL = [
+        "1girl, long blue hair, maid outfit, smiling, indoor cafe background, anime style",
+        # 可按需增删条目…
+    ]
 ```
 
 ### 关键配置说明
@@ -58,24 +64,43 @@ class Config:
 | `SUPERUSER_ID` | **必须修改**。填入你自己的 QQ 号，机器人会将生成的图片私聊发给你。 |
 | `SCHEDULER_START_HOUR` | 定时任务允许运行的最早小时（24 小时制，默认 `8`，即上午 8 点）。 |
 | `SCHEDULER_END_HOUR` | 定时任务允许运行的最晚小时（24 小时制，默认 `23`，即晚上 11 点）。 |
-| `SCHEDULER_INTERVAL_MINUTES` | 相邻两次自动生成的间隔分钟数（默认 `120`，即 2 小时）。 |
+| `SCHEDULER_INTERVAL_MINUTES` | 相邻两次完整流水线的间隔分钟数（默认 `120`，即 2 小时）。 |
 | `SD_MODEL_ID` | Stable Diffusion 1.5 基础模型 ID，可在 [Hugging Face](https://huggingface.co/models?pipeline_tag=text-to-image) 搜索同架构模型进行替换。 |
 | `CONTROLNET_MODEL_ID` | ControlNet 模型 ID，默认使用 OpenPose 姿态控制模型。 |
 | `LOCAL_MODEL_PATH` | SD 模型的**本地目录路径**。填写后直接从磁盘加载，完全跳过网络下载。留空则使用 `SD_MODEL_ID` 自动下载。 |
 | `LOCAL_CONTROLNET_PATH` | ControlNet 模型的**本地目录路径**。含义同上。 |
+| `SUBJECT_POOL` | **主题描述词池**。每条描述代表一幅完整成品图的要求，系统会自动将其分解到各绘画步骤的 prompt 中。可按需增删条目。 |
+| `PIPELINE_STEPS` | 绘画流水线步骤定义（高级）。默认内置 8 步，一般无需修改；如需调整各步骤的提示词模板或 ControlNet 权重，可直接编辑该列表。 |
 
 ---
 
 ## 使用指南
+
+### 绘画流水线（8 步骤）
+
+每幅完整插图由以下 8 个步骤依次完成，每步的输出图像作为下一步的 ControlNet 条件输入：
+
+| 步骤 | 名称 | 说明 |
+|------|------|------|
+| 1 | `step_1_skeleton` | 最简易骨架/定位线草图：确定人物位置、姿势、视角 |
+| 2 | `step_2_rough_sketch` | 外貌/背景轮廓草图：发型、服装外轮廓、背景要素 |
+| 3 | `step_3_detailed_sketch` | 细化草图：丰富细节，为线稿做准备 |
+| 4 | `step_4_lineart` | 高完成度线稿：精确干净的墨线 |
+| 5 | `step_5_base_color` | 上大块底色：平铺主色调 |
+| 6 | `step_6_refined_color` | 细化色块：补充小范围颜色 |
+| 7 | `step_7_color_blend` | 调色：减弱色块感，增强均匀感 |
+| 8 | `step_8_lighting` | 添加光影效果：完稿 |
+
+**无需手动为每个步骤编写 prompt**——只需在 `SUBJECT_POOL` 中描述最终成品图的要求（如 `"1girl, blue hair, maid outfit, indoor cafe, anime style"`），系统会自动将其注入到各步骤的提示词模板中。
 
 ### 自动训练（定时任务）
 
 插件启动后会按 `SCHEDULER_INTERVAL_MINUTES` 设定的间隔自动触发，**仅在 `SCHEDULER_START_HOUR`（含）到 `SCHEDULER_END_HOUR`（含）之间运行**（默认 8:00–23:00），不会在深夜打扰你。
 
 每次触发时，机器人会：
-1. 从预设任务列表中随机选取一个绘画任务（骨架、草图、线稿、上色等）。
-2. 调用 AI 引擎生成图片。
-3. 以私聊消息的形式将图片推送给 `SUPERUSER_ID` 指定的用户。
+1. 从 `SUBJECT_POOL` 随机选取一条主题描述（最终成品图要求）。
+2. 依次执行全部 8 个绘画步骤，每步用上一步的结果作为 ControlNet 条件输入。
+3. 将每个步骤的生成图以私聊消息的形式推送给 `SUPERUSER_ID` 指定的用户（共 8 条消息）。
 
 收到图片后，**引用（回复）该图片消息**并发送以下命令进行标注：
 
@@ -89,17 +114,20 @@ class Config:
 示例流程：
 ```
 [机器人私聊]
-[碎片时间标注]
-任务: step_3_lineart
-Prompt: clean lineart, 1girl, detailed clothing
+[碎片时间标注] 第一草图（骨架/定位线） (1/8)
+主题: 1girl, blue hair, maid outfit, smiling, indoor cafe background, anime style
+步骤: step_1_skeleton
+Prompt: simple body skeleton, rough position lines, pose composition, 1girl, blue hair …
 [图片]
 回复 [ok] 归档，回复 [pass] 丢弃
 
-[用户引用上图回复]
+… (2/8 到 8/8 同理) …
+
+[用户引用第4张图（线稿）回复]
 ok
 
 [机器人回复]
-✅ 已归档至 step_3_lineart，样本库+1
+✅ 已归档至 step_4_lineart，样本库+1
 ```
 
 ### 手动绘画
@@ -132,19 +160,26 @@ ok
 
 ```
 data/ai_trainer/
-├── pending/                  # 待审核图片（临时目录）
+├── pending/                    # 待审核图片（临时目录）
 │   ├── step_1_skeleton/
-│   ├── step_2_sketch/
-│   ├── step_3_lineart/
-│   └── step_4_color/
-├── train/                    # 已批准的训练数据
+│   ├── step_2_rough_sketch/
+│   ├── step_3_detailed_sketch/
+│   ├── step_4_lineart/
+│   ├── step_5_base_color/
+│   ├── step_6_refined_color/
+│   ├── step_7_color_blend/
+│   └── step_8_lighting/
+├── train/                      # 已批准的训练数据
 │   ├── step_1_skeleton/
-│   ├── step_2_sketch/
-│   ├── step_3_lineart/
-│   ├── step_4_color/
-│   ├── step_5_finish/
-│   └── metadata.jsonl        # HuggingFace 兼容格式元数据
-└── rejected/                 # 已拒绝的图片
+│   ├── step_2_rough_sketch/
+│   ├── step_3_detailed_sketch/
+│   ├── step_4_lineart/
+│   ├── step_5_base_color/
+│   ├── step_6_refined_color/
+│   ├── step_7_color_blend/
+│   ├── step_8_lighting/
+│   └── metadata.jsonl          # HuggingFace 兼容格式元数据
+└── rejected/                   # 已拒绝的图片
 ```
 
 ### `metadata.jsonl` 格式
@@ -152,8 +187,8 @@ data/ai_trainer/
 每条记录为一行 JSON，兼容 HuggingFace `datasets` 库直接加载：
 
 ```jsonl
-{"file_name": "step_3_lineart/1718000000_123456789.png", "text": "clean lineart, 1girl, detailed clothing", "seed": 123456789, "control_params": {}}
-{"file_name": "step_4_color/1718003600_987654321.png", "text": "flat color, anime, 1girl, blue hair", "seed": 987654321, "control_params": {}}
+{"file_name": "step_4_lineart/1718000000_123456789.png", "text": "clean ink lineart, precise clean lines, 1girl, blue hair …", "seed": 123456789, "control_params": {}}
+{"file_name": "step_8_lighting/1718003600_987654321.png", "text": "lighting and shadows, highlights, rim light, shading, 1girl, blue hair …", "seed": 987654321, "control_params": {}}
 ```
 
 ---
@@ -193,15 +228,17 @@ HF_ENDPOINT=https://hf-mirror.com huggingface-cli download \
     --local-dir models/sd-controlnet-openpose
 ```
 
-> **Windows 用户：** PowerShell 中使用以下等效命令（分两条执行）：
+> **Windows 用户：** PowerShell 中使用以下等效命令：
 > ```powershell
 > $env:HF_ENDPOINT = "https://hf-mirror.com"
 > huggingface-cli download runwayml/stable-diffusion-v1-5 --local-dir models/stable-diffusion-v1-5
+> huggingface-cli download lllyasviel/sd-controlnet-openpose --local-dir models/sd-controlnet-openpose
 > ```
 > 或在 CMD 中：
 > ```cmd
 > set HF_ENDPOINT=https://hf-mirror.com
 > huggingface-cli download runwayml/stable-diffusion-v1-5 --local-dir models/stable-diffusion-v1-5
+> huggingface-cli download lllyasviel/sd-controlnet-openpose --local-dir models/sd-controlnet-openpose
 > ```
 
 #### 方法二：使用 git-lfs

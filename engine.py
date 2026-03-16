@@ -2,6 +2,7 @@
 import os
 import time
 import random
+from typing import Optional
 import torch
 from pathlib import Path
 from PIL import Image
@@ -24,7 +25,7 @@ _HF_ENDPOINTS = [
     "https://huggingface.co",
 ]
 _RETRIES_PER_ENDPOINT = 3
-_RETRY_BASE_DELAY = 5  # 秒，实际等待时间 = base * attempt
+_RETRY_BASE_DELAY = 5  # 秒，实际等待时间 = base * 2^retry（指数退避）
 
 
 def _load_with_retry(loader_fn, description: str = ""):
@@ -40,7 +41,7 @@ def _load_with_retry(loader_fn, description: str = ""):
     Raises:
         RuntimeError: 所有端点全部重试失败后抛出，附带操作指引。
     """
-    last_exc: Exception | None = None
+    last_exc: Optional[Exception] = None
     attempt = 0
     for endpoint in _HF_ENDPOINTS:
         os.environ["HF_ENDPOINT"] = endpoint
