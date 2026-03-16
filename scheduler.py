@@ -1,115 +1,161 @@
 # scheduler.py
-import io
-import random
+"""定时任务模块：每 3 小时（仅在 8:00-23:00 之间）自动触发一次绘画流水线。
+
+流程：
+1. 从 Config.SUBJECT_POOL 随机选取一条主题描述。
+2. 生成阶段 1（构图）图片并发送给超级用户。
+3. 等待用户评分（1-5 分）；评分存于 `__init__.py` 管理的 `_pipeline_sessions` 中。
+4. 后续阶段由 `__init__.py` 中的评分回调驱动（≤2 分重做，>2 分推进）。
+"""
+
 import asyncio
+import random
 from datetime import datetime
 
-from nonebot import require, get_bot
-from nonebot.adapters.onebot.v11 import MessageSegment
+from nonebot import get_bot, require
 
 require("nonebot_plugin_apscheduler")
-from nonebot_plugin_apscheduler import scheduler
+from nonebot_plugin_apscheduler import scheduler  # noqa: E402
 
 from .config import Config
 from .engine import engine
 from .manager import data_manager
-
-# 全局待审核队列: { "msg_id": "pending_file_path" }
-review_queue = {}
+from .utils import image_to_bytes
 
 
-# 定时任务：每 SCHEDULER_INTERVAL_MINUTES 分钟触发一次
-@scheduler.scheduled_job(
-    "interval",
-    minutes=Config.SCHEDULER_INTERVAL_MINUTES,
-    id="auto_paint",
-)
-async def auto_generate_task() -> None:
-    """碎片时间标注任务：按完整绘画流水线自动生成图片并私聊超级用户审核。
+# ---------------------------------------------------------------------------
+# 全局流水线会话注册表（由 __init__.py 引用）
+# ---------------------------------------------------------------------------
+# Key: bot 已发送消息的 message_id（字符串）
+# Value: PipelineSession 实例
+_pipeline_sessions: dict[str, "PipelineSession"] = {}
 
-    每次触发时：
-    1. 从 Config.SUBJECT_POOL 随机选取一条主题描述（代表最终成品图的要求）。
-    2. 依次执行 Config.PIPELINE_STEPS 中定义的全部绘画步骤：
-       骨架/定位 → 外貌/背景轮廓草图 → 细化草图 × 2 → 线稿 →
-       上大底色 → 细化色块 → 调色 → 光影完稿。
-       主题描述自动注入各步骤的提示词模板，无需手动填写每步 prompt。
-    3. 每个步骤的输出图像作为下一步骤的 ControlNet 条件输入，实现逐步精修。
-    4. 每步结果单独推送给超级用户审核（ok/pass）。
 
-    只在每天 Config.SCHEDULER_START_HOUR 至 Config.SCHEDULER_END_HOUR
-    （含）之间执行，避免深夜打扰。
+class PipelineSession:
+    """记录一次完整 4 阶段绘画任务的运行状态。
+
+    Attributes:
+        subject:        本次创作的主题描述。
+        stage_index:    当前正在等待评分的阶段索引（0-3）。
+        stage_images:   已完成阶段的输出图片列表（长度 = stage_index）。
+        pending_path:   当前阶段图片在 pending 目录的磁盘路径。
+        source:         触发来源，``"scheduler"`` 或 ``"manual"``。
     """
-    now = datetime.now()
-    if not (Config.SCHEDULER_START_HOUR <= now.hour <= Config.SCHEDULER_END_HOUR):
+
+    def __init__(self, subject: str, source: str = "scheduler") -> None:
+        self.subject = subject
+        self.stage_index: int = 0
+        self.stage_images: list = []        # 已通过阶段的 PIL.Image 列表
+        self.pending_path: str = ""
+        self.source = source
+
+
+async def start_pipeline(subject: str, source: str = "scheduler") -> None:
+    """启动一次完整的 4 阶段流水线并发送阶段 1 图片给超级用户。
+
+    Args:
+        subject: 主题描述词，会注入到各阶段的 prompt_template。
+        source:  触发来源标识（用于元数据记录）。
+    """
+    session = PipelineSession(subject=subject, source=source)
+    await _run_stage(session)
+
+
+async def _run_stage(session: PipelineSession) -> None:
+    """生成当前阶段图片，保存至 pending，并发送私信给超级用户。
+
+    Args:
+        session: 当前流水线会话实例。
+    """
+    stages = Config.PIPELINE_STAGES
+    idx = session.stage_index
+
+    if idx >= len(stages):
+        # 所有阶段已完成
+        try:
+            bot = get_bot()
+            await bot.send_private_msg(
+                user_id=int(Config.SUPERUSER_ID),
+                message=f"🎉 流水线完成！主题：{session.subject}",
+            )
+        except Exception as e:
+            print(f"[ai_trainer] 发送完成通知失败: {e}")
         return
 
-    bot = get_bot()
+    stage = stages[idx]
+    prev_image = session.stage_images[-1] if session.stage_images else None
 
-    # 1. 随机选取主题描述（最终成品图的完整要求）
-    subject = random.choice(Config.SUBJECT_POOL)
-    total = len(Config.PIPELINE_STEPS)
-    print(f"[ai_trainer] 开始完整流水线 | 主题: {subject} | 共 {total} 步")
+    prompt = stage["prompt_template"].format(subject=session.subject)
+    stage_config = {
+        "prompt": prompt,
+        "controlnet": stage["controlnet"],
+        "scale": stage["scale"],
+    }
 
-    prev_image = None
-    for idx, step in enumerate(Config.PIPELINE_STEPS, start=1):
-        # 2. 将主题描述注入当前步骤的提示词模板
-        prompt = step["prompt_template"].format(subject=subject)
-        step_config = {
-            "prompt": prompt,
-            "controlnet_conditioning_scale": step["controlnet_conditioning_scale"],
-        }
-        print(
-            f"[ai_trainer] 步骤 {idx}/{total}: {step['name']} ({step['label']}) "
-            f"| scale={step['controlnet_conditioning_scale']} | prompt: {prompt}"
+    print(
+        f"[ai_trainer] 开始阶段 {idx + 1}/{len(stages)}: {stage['name']} "
+        f"| 主题: {session.subject}"
+    )
+
+    try:
+        image, seed = await asyncio.to_thread(engine.generate, stage_config, prev_image)
+    except Exception as e:
+        print(f"[ai_trainer] 阶段 {stage['name']} 生成失败: {e}")
+        return
+
+    # 保存到 pending 目录
+    meta = {
+        "prompt": prompt,
+        "seed": seed,
+        "subject": session.subject,
+        "stage": stage["name"],
+        "stage_label": stage["label"],
+        "source": session.source,
+    }
+    session.pending_path = data_manager.save_pending(image, stage["name"], meta)
+
+    # 私聊超级用户
+    try:
+        from nonebot.adapters.onebot.v11 import MessageSegment
+
+        msg = (
+            MessageSegment.text(
+                f"[AI训练师] {stage['label']} ({idx + 1}/{len(stages)})\n"
+                f"主题：{session.subject}\n"
+                f"Prompt：{prompt}\n\n"
+                "请**引用本条消息**回复评分（1-5 分）：\n"
+                "  1-2 分 → 重新生成本阶段\n"
+                "  3-5 分 → 归档并进入下一阶段\n"
+                "也可直接回复 ok（相当于5分）或 pass（相当于1分）"
+            )
+            + MessageSegment.image(image_to_bytes(image))
         )
+        bot = get_bot()
+        sent = await bot.send_private_msg(
+            user_id=int(Config.SUPERUSER_ID), message=msg
+        )
+        msg_id = str(sent["message_id"])
+        _pipeline_sessions[msg_id] = session
+        print(f"[ai_trainer] 阶段 {stage['name']} 已发送，消息ID: {msg_id}")
+    except Exception as e:
+        print(f"[ai_trainer] 发送阶段 {stage['name']} 消息失败: {e}")
 
-        # 3. 在线程池中调用引擎（避免阻塞事件循环）
-        try:
-            image, seed = await asyncio.to_thread(
-                engine.generate, step_config, prev_image
-            )
-        except Exception as e:
-            print(f"[ai_trainer] 步骤 {step['name']} 生成失败: {e}")
-            break
 
-        # 4. 保存到 Pending 区
-        meta = {
-            "prompt": prompt,
-            "seed": seed,
-            "source": "auto_scheduler",
-            "subject": subject,
-            "step": step["name"],
-            "step_label": step["label"],
-        }
-        file_path = data_manager.save_pending(image, step["name"], meta)
+# ---------------------------------------------------------------------------
+# 定时任务：每 3 小时触发一次，仅在 [SCHEDULE_START_HOUR, SCHEDULE_END_HOUR]
+# ---------------------------------------------------------------------------
+@scheduler.scheduled_job(
+    "cron",
+    hour=f"{Config.SCHEDULE_START_HOUR}-{Config.SCHEDULE_END_HOUR}/3",
+    minute=0,
+    id="ai_trainer_auto",
+)
+async def auto_pipeline_task() -> None:
+    """每 3 小时自动触发一次绘画流水线（仅在配置的时间窗口内）。"""
+    now = datetime.now()
+    if not (Config.SCHEDULE_START_HOUR <= now.hour <= Config.SCHEDULE_END_HOUR):
+        return
 
-        # 5. 将图片编码为字节流后推送给超级用户审核
-        img_byte = io.BytesIO()
-        image.save(img_byte, format="PNG")
-
-        try:
-            msg = (
-                MessageSegment.text(
-                    f"[碎片时间标注] {step['label']} ({idx}/{total})\n"
-                    f"主题: {subject}\n"
-                    f"步骤: {step['name']}\n"
-                    f"Prompt: {prompt}\n"
-                )
-                + MessageSegment.image(img_byte.getvalue())
-                + MessageSegment.text("\n回复 [ok] 归档，回复 [pass] 丢弃")
-            )
-            sent = await bot.send_private_msg(
-                user_id=int(Config.SUPERUSER_ID), message=msg
-            )
-
-            # 记录消息 ID，供后续引用回复时查找
-            msg_id = str(sent["message_id"])
-            review_queue[msg_id] = file_path
-
-        except Exception as e:
-            print(f"[ai_trainer] 步骤 {step['name']} 推送失败: {e}")
-
-        # 6. 以当前步骤输出作为下一步骤的 ControlNet 条件图
-        prev_image = image
-
-    print(f"[ai_trainer] 流水线完成 | 主题: {subject}")
+    subject = random.choice(Config.SUBJECT_POOL)
+    print(f"[ai_trainer] 定时任务触发 | 时间: {now.strftime('%H:%M')} | 主题: {subject}")
+    await start_pipeline(subject=subject, source="scheduler")
