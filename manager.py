@@ -102,7 +102,6 @@ class DataManager:
         if dest_meta.exists():
             with open(dest_meta, "r", encoding="utf-8") as f:
                 meta = json.load(f)
-
         record = {
             "file_name": f"{stage_name}/{src_img.name}",
             "text": meta.get("prompt", ""),

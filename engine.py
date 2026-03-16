@@ -14,7 +14,7 @@ from typing import Optional
 # ---------------------------------------------------------------------------
 # !! CRITICAL !! 必须在所有 HuggingFace 库导入之前设置，才能让镜像加速生效
 # ---------------------------------------------------------------------------
-from .config import Config as _Cfg  # noqa: E402  (intentional early import)
+from .config import Config as _Cfg  # imported before HuggingFace libs to set HF_ENDPOINT first
 
 if _Cfg.HF_MIRROR:
     os.environ["HF_ENDPOINT"] = _Cfg.HF_ENDPOINT_MIRROR
@@ -115,6 +115,7 @@ class ArtEngine:
     """
 
     _instance: Optional["ArtEngine"] = None
+    _initialized: bool = False  # class-level default; instance-level set in __new__
 
     def __new__(cls) -> "ArtEngine":
         if cls._instance is None:
@@ -123,7 +124,7 @@ class ArtEngine:
         return cls._instance
 
     def __init__(self) -> None:
-        if self._initialized:  # type: ignore[attr-defined]
+        if self._initialized:
             return
         self._initialized = True
         self._pipeline: StableDiffusionControlNetPipeline = self._build_pipeline()

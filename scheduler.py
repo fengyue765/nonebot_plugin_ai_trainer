@@ -24,12 +24,8 @@ from .utils import image_to_bytes
 
 
 # ---------------------------------------------------------------------------
-# 全局流水线会话注册表（由 __init__.py 引用）
+# 流水线会话状态对象
 # ---------------------------------------------------------------------------
-# Key: bot 已发送消息的 message_id（字符串）
-# Value: PipelineSession 实例
-_pipeline_sessions: dict[str, "PipelineSession"] = {}
-
 
 class PipelineSession:
     """记录一次完整 4 阶段绘画任务的运行状态。
@@ -48,6 +44,14 @@ class PipelineSession:
         self.stage_images: list = []        # 已通过阶段的 PIL.Image 列表
         self.pending_path: str = ""
         self.source = source
+
+
+# ---------------------------------------------------------------------------
+# 全局流水线会话注册表（由 __init__.py 引用）
+# ---------------------------------------------------------------------------
+# Key: bot 已发送消息的 message_id（字符串）
+# Value: PipelineSession 实例
+_pipeline_sessions: dict[str, PipelineSession] = {}
 
 
 async def start_pipeline(subject: str, source: str = "scheduler") -> None:
