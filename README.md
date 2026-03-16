@@ -61,6 +61,8 @@ class Config:
 | `SCHEDULER_INTERVAL_MINUTES` | 相邻两次自动生成的间隔分钟数（默认 `120`，即 2 小时）。 |
 | `SD_MODEL_ID` | Stable Diffusion 1.5 基础模型 ID，可在 [Hugging Face](https://huggingface.co/models?pipeline_tag=text-to-image) 搜索同架构模型进行替换。 |
 | `CONTROLNET_MODEL_ID` | ControlNet 模型 ID，默认使用 OpenPose 姿态控制模型。 |
+| `LOCAL_MODEL_PATH` | SD 模型的**本地目录路径**。填写后直接从磁盘加载，完全跳过网络下载。留空则使用 `SD_MODEL_ID` 自动下载。 |
+| `LOCAL_CONTROLNET_PATH` | ControlNet 模型的**本地目录路径**。含义同上。 |
 
 ---
 
@@ -161,6 +163,69 @@ data/ai_trainer/
 ### 首次启动时机器人长时间无响应
 
 首次运行时，插件会自动从 Hugging Face Hub 下载 Stable Diffusion 1.5 及 ControlNet 模型权重（合计约 **5–8 GB**），视网络环境可能需要数分钟至数十分钟。下载完成后模型会缓存至本地，后续启动不会重复下载。
+
+插件会依次尝试以下下载策略，无需任何手动配置：
+
+1. **hf-mirror.com 镜像站**（每个端点最多重试 3 次，带退避等待）
+2. **huggingface.co 官方站**（同样重试 3 次）
+
+若两个端点均失败，会在日志中打印明确的错误信息并指引手动下载。
+
+---
+
+### 手动下载模型（网络受限时）
+
+如果自动下载仍然失败，可以通过以下任一方式手动下载模型，并在 `config.py` 中配置本地路径。
+
+#### 方法一：使用 huggingface-cli（推荐）
+
+```bash
+pip install -U huggingface_hub
+
+# 下载 SD 1.5 基础模型（约 4 GB）
+HF_ENDPOINT=https://hf-mirror.com huggingface-cli download \
+    runwayml/stable-diffusion-v1-5 \
+    --local-dir models/stable-diffusion-v1-5
+
+# 下载 ControlNet OpenPose 模型（约 1.5 GB）
+HF_ENDPOINT=https://hf-mirror.com huggingface-cli download \
+    lllyasviel/sd-controlnet-openpose \
+    --local-dir models/sd-controlnet-openpose
+```
+
+> **Windows 用户：** PowerShell 中使用以下等效命令（分两条执行）：
+> ```powershell
+> $env:HF_ENDPOINT = "https://hf-mirror.com"
+> huggingface-cli download runwayml/stable-diffusion-v1-5 --local-dir models/stable-diffusion-v1-5
+> ```
+> 或在 CMD 中：
+> ```cmd
+> set HF_ENDPOINT=https://hf-mirror.com
+> huggingface-cli download runwayml/stable-diffusion-v1-5 --local-dir models/stable-diffusion-v1-5
+> ```
+
+#### 方法二：使用 git-lfs
+
+```bash
+# 前提：已安装 Git LFS（https://git-lfs.github.com）
+git lfs install
+
+# 克隆镜像仓库
+git clone https://hf-mirror.com/runwayml/stable-diffusion-v1-5 models/stable-diffusion-v1-5
+git clone https://hf-mirror.com/lllyasviel/sd-controlnet-openpose models/sd-controlnet-openpose
+```
+
+#### 配置本地路径
+
+将下载好的模型目录路径填入 `config.py`：
+
+```python
+# 支持绝对路径和相对路径（相对于机器人运行目录）
+LOCAL_MODEL_PATH = "models/stable-diffusion-v1-5"
+LOCAL_CONTROLNET_PATH = "models/sd-controlnet-openpose"
+```
+
+填写后重启机器人，插件将直接从本地磁盘加载，完全绕过网络。
 
 ### 显存要求
 

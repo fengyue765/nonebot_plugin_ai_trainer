@@ -10,9 +10,15 @@ class Config:
     IMAGE_WIDTH = 512
     IMAGE_HEIGHT = 512
 
-    # 模型 ID
+    # 模型 ID（从网络自动下载时使用）
     SD_MODEL_ID = "runwayml/stable-diffusion-v1-5"
     CONTROLNET_MODEL_ID = "lllyasviel/sd-controlnet-openpose"
+
+    # 手动下载模型时的本地路径（留空则从网络下载）
+    # 填写后将完全跳过网络，直接从本地磁盘加载，支持绝对路径和相对路径。
+    # 示例：LOCAL_MODEL_PATH = "models/stable-diffusion-v1-5"
+    LOCAL_MODEL_PATH: str = ""
+    LOCAL_CONTROLNET_PATH: str = ""
 
     # 定时任务设置
     # 每隔多少分钟生成一次（建议 120-180 分钟）
