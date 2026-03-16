@@ -1,7 +1,12 @@
 # engine.py
+import os
 import random
 import torch
 from PIL import Image
+
+os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
+print("Using HF Mirror: https://hf-mirror.com")
+
 from diffusers import StableDiffusionControlNetPipeline, ControlNetModel
 from .config import Config
 
