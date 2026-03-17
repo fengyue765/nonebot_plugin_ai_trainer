@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Optional
 
 from ..config import Config
+from ..backend.comfy import comfy_client
 
 
 class PersonaManager:
@@ -148,6 +149,9 @@ class PersonaManager:
         user_prompt = f"Image tags: {tags}"
 
         try:
+            # Free ComfyUI VRAM so Ollama can load its model
+            await comfy_client.unload_models()
+
             payload = {
                 "model": self._ollama_model,
                 "messages": [
@@ -155,6 +159,7 @@ class PersonaManager:
                     {"role": "user", "content": user_prompt},
                 ],
                 "stream": False,
+                "keep_alive": 0,
             }
             async with aiohttp.ClientSession() as session:
                 async with session.post(

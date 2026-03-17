@@ -219,6 +219,26 @@ class ComfyClient:
             raise RuntimeError("stepx_img2img returned no images")
         return images[0]
 
+    async def unload_models(self) -> None:
+        """Ask ComfyUI to release VRAM so that Ollama can load its models.
+
+        Attempts to call the ``/free`` endpoint provided by ComfyUI-Manager and
+        the built-in ``/interrupt`` endpoint.  Both calls are fire-and-forget:
+        failures are silently swallowed because VRAM management is best-effort
+        and should never block the main pipeline.
+        """
+        try:
+            async with aiohttp.ClientSession() as session:
+                for path in ("/free", "/interrupt"):
+                    try:
+                        async with session.post(f"{self.http_url}{path}") as resp:
+                            # Consume the response body to avoid connection leaks
+                            await resp.read()
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
     async def get_image_tags(self, image_bytes: bytes) -> str:
         """Run the WD14 Tagger workflow to extract tags from an image.
 
@@ -271,3 +291,7 @@ class ComfyClient:
                 return ""
         except Exception as exc:
             raise RuntimeError(f"get_image_tags failed: {exc}") from exc
+
+
+# Module-level singleton
+comfy_client = ComfyClient()
