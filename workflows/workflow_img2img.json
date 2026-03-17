@@ -1,0 +1,101 @@
+{
+  "1": {
+    "class_type": "CheckpointLoaderSimple",
+    "_meta": { "title": "Load Checkpoint" },
+    "inputs": {
+      "ckpt_name": "v1-5-pruned-emaonly.safetensors"
+    }
+  },
+  "2": {
+    "class_type": "CLIPTextEncode",
+    "_meta": { "title": "positive" },
+    "inputs": {
+      "text": "anime illustration, masterpiece",
+      "clip": ["1", 1]
+    }
+  },
+  "3": {
+    "class_type": "CLIPTextEncode",
+    "_meta": { "title": "negative" },
+    "inputs": {
+      "text": "lowres, blurry, bad anatomy",
+      "clip": ["1", 1]
+    }
+  },
+  "4": {
+    "class_type": "LoadImage",
+    "_meta": { "title": "Load Input Image" },
+    "inputs": {
+      "image": "input.png",
+      "upload": "image"
+    }
+  },
+  "5": {
+    "class_type": "CannyEdgePreprocessor",
+    "_meta": { "title": "Canny Edge Preprocessor" },
+    "inputs": {
+      "image": ["4", 0],
+      "low_threshold": 100,
+      "high_threshold": 200,
+      "resolution": 512
+    }
+  },
+  "6": {
+    "class_type": "ControlNetLoader",
+    "_meta": { "title": "Load ControlNet" },
+    "inputs": {
+      "control_net_name": "control_v11p_sd15_canny.pth"
+    }
+  },
+  "7": {
+    "class_type": "ControlNetApply",
+    "_meta": { "title": "Apply ControlNet" },
+    "inputs": {
+      "conditioning": ["2", 0],
+      "control_net": ["6", 0],
+      "image": ["5", 0],
+      "strength": 0.85
+    }
+  },
+  "8": {
+    "class_type": "VAEEncodeForInpaint",
+    "_meta": { "title": "VAE Encode (img2img)" },
+    "inputs": {
+      "pixels": ["4", 0],
+      "vae": ["1", 2],
+      "grow_mask_by": 6
+    }
+  },
+  "9": {
+    "class_type": "KSampler",
+    "_meta": { "title": "KSampler" },
+    "inputs": {
+      "seed": 42,
+      "steps": 30,
+      "cfg": 7,
+      "sampler_name": "euler",
+      "scheduler": "normal",
+      "denoise": 0.75,
+      "model": ["1", 0],
+      "positive": ["7", 0],
+      "negative": ["3", 0],
+      "latent_image": ["8", 0]
+    }
+  },
+  "10": {
+    "class_type": "VAEDecode",
+    "_meta": { "title": "VAE Decode" },
+    "inputs": {
+      "samples": ["9", 0],
+      "vae": ["1", 2]
+    }
+  },
+  "11": {
+    "class_type": "SaveImage",
+    "_meta": { "title": "Save Image" },
+    "inputs": {
+      "filename_prefix": "img2img_output",
+      "images": ["10", 0]
+    }
+  }
+}
