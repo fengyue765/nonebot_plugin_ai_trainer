@@ -1,274 +1,143 @@
 # nonebot_plugin_ai_trainer
 
-一个用于 **AI 绘画训练数据采集** 的 NoneBot2 插件，采用"人在回路（Human-in-the-Loop）"工作流。  
-插件通过定时任务自动生成候选图片，并以私聊消息的形式推送给超级用户，由用户通过交互命令审核标注，被批准的图片将自动保存为标准训练数据集。
+一个基于 **ComfyUI + Ollama** 的 NoneBot2 AI 绘画训练插件，实现"人在回路（Human-in-the-Loop）"四阶段绘画流水线。
 
 ---
 
-## 安装
+## 功能概览
 
-### 依赖
+1. **风格学习**：发送参考图片，插件用 WD14 Tagger 自动提取标签并通过 Ollama 分析，生成一个"画风人格（Persona）"。
+2. **四阶段绘画流水线**：草图 → 线稿 → 底色 → 完稿，每一步都通过 ComfyUI 后端生成。
+3. **定时推进**：每隔 2 小时（8:00-23:00）自动推进当前步骤并发送给用户评分。
+4. **交互评分**：用户回复 1-5 分，低分重画，高分推进到下一步。
 
-| 包名 | 说明 |
-|------|------|
-| `torch` | PyTorch 深度学习框架 |
-| `diffusers` | Hugging Face 扩散模型库 |
-| `controlnet_aux` | ControlNet 预处理器集合 |
-| `Pillow` | 图像处理 |
-| `nonebot-plugin-apscheduler` | NoneBot2 定时任务支持 |
+---
 
-```bash
-pip install torch diffusers controlnet_aux Pillow nonebot-plugin-apscheduler
+## 目录结构
+
+```
+nonebot_plugin_ai_trainer/
+├── __init__.py          # 插件入口，命令注册，定时任务
+├── config.py            # 所有配置项
+├── core/
+│   ├── persona.py       # 画风人格管理
+│   ├── prompts.py       # 提示词生成与 Ollama 优化
+│   └── pipeline.py      # 四阶段流水线状态管理
+├── backend/
+│   └── comfy.py         # ComfyUI API 客户端
+└── workflows/
+    ├── workflow_step1.json      # Txt2Img（草图）
+    ├── workflow_img2img.json    # Img2Img + Canny ControlNet（细化）
+    └── workflow_tagger.json     # WD14 图片标签提取
 ```
 
-> **注意：** 首次运行时插件会自动从 Hugging Face 下载模型权重，视网络环境可能需要较长时间，请耐心等待。
+---
+
+## 环境要求
+
+| 依赖 | 说明 |
+|------|------|
+| [ComfyUI](https://github.com/comfyanonymous/ComfyUI) | 后端图像生成引擎（需本地部署） |
+| [Ollama](https://ollama.ai) + `dolphin-llama3` | 提示词优化 & 风格分析 |
+| `aiohttp` | 异步 HTTP/WebSocket 通信 |
+| `nonebot-plugin-apscheduler` | NoneBot2 定时任务 |
+
+```bash
+pip install aiohttp nonebot-plugin-apscheduler
+```
+
+### ComfyUI 所需模型
+
+将以下模型放入 ComfyUI 对应目录：
+
+| 模型 | 路径 |
+|------|------|
+| SD 1.5（如 `v1-5-pruned-emaonly.safetensors`） | `ComfyUI/models/checkpoints/` |
+| ControlNet Canny（`control_v11p_sd15_canny.pth`） | `ComfyUI/models/controlnet/` |
+| WD14 Tagger（需安装 `ComfyUI-WD14-Tagger` 节点） | 节点自动管理 |
 
 ---
 
 ## 配置
 
-所有配置项均位于 `nonebot_plugin_ai_trainer/config.py`：
+编辑 `nonebot_plugin_ai_trainer/config.py`：
 
 ```python
 class Config:
-    # !! 必须修改：请替换为你的实际 QQ 号，否则机器人无法私聊你 !!
-    SUPERUSER_ID = "YOUR_QQ_ID_HERE"
+    SUPERUSER_ID: str = "YOUR_QQ_ID_HERE"   # !! 必须修改 !!
 
-    # 数据路径
-    BASE_DATA_PATH = "data/ai_trainer"
+    COMFY_URL: str = "127.0.0.1:8188"       # ComfyUI 地址
+    OLLAMA_URL: str = "http://127.0.0.1:11434"  # Ollama 地址
+    OLLAMA_MODEL: str = "dolphin-llama3"    # Ollama 模型
 
-    # 生成图片的分辨率
-    IMAGE_WIDTH = 512
-    IMAGE_HEIGHT = 512
+    DATA_ROOT: str = "data/ai_trainer"
 
-    # 模型 ID（SD 1.5 系列）
-    SD_MODEL_ID = "runwayml/stable-diffusion-v1-5"
-    CONTROLNET_MODEL_ID = "lllyasviel/sd-controlnet-openpose"
-
-    # 定时任务设置
-    SCHEDULER_INTERVAL_MINUTES = 120  # 每隔多少分钟生成一次
-    SCHEDULER_START_HOUR = 8          # 任务允许运行的起始小时（含）
-    SCHEDULER_END_HOUR = 23           # 任务允许运行的结束小时（含）
-
-    # 主题描述词池（每次触发随机选取一条，自动分解为各步骤 prompt）
-    SUBJECT_POOL = [
-        "1girl, long blue hair, maid outfit, smiling, indoor cafe background, anime style",
-        # 可按需增删条目…
-    ]
+    SCHEDULER_INTERVAL_HOURS: int = 2       # 推进间隔（小时）
+    SCHEDULER_START_HOUR: int = 8
+    SCHEDULER_END_HOUR: int = 23
 ```
-
-### 关键配置说明
-
-| 配置项 | 说明 |
-|--------|------|
-| `SUPERUSER_ID` | **必须修改**。填入你自己的 QQ 号，机器人会将生成的图片私聊发给你。 |
-| `SCHEDULER_START_HOUR` | 定时任务允许运行的最早小时（24 小时制，默认 `8`，即上午 8 点）。 |
-| `SCHEDULER_END_HOUR` | 定时任务允许运行的最晚小时（24 小时制，默认 `23`，即晚上 11 点）。 |
-| `SCHEDULER_INTERVAL_MINUTES` | 相邻两次完整流水线的间隔分钟数（默认 `120`，即 2 小时）。 |
-| `SD_MODEL_ID` | Stable Diffusion 1.5 基础模型 ID，可在 [Hugging Face](https://huggingface.co/models?pipeline_tag=text-to-image) 搜索同架构模型进行替换。 |
-| `CONTROLNET_MODEL_ID` | ControlNet 模型 ID，默认使用 OpenPose 姿态控制模型。 |
-| `LOCAL_MODEL_PATH` | SD 模型的**本地目录路径**。填写后直接从磁盘加载，完全跳过网络下载。留空则使用 `SD_MODEL_ID` 自动下载。 |
-| `LOCAL_CONTROLNET_PATH` | ControlNet 模型的**本地目录路径**。含义同上。 |
-| `SUBJECT_POOL` | **主题描述词池**。每条描述代表一幅完整成品图的要求，系统会自动将其分解到各绘画步骤的 prompt 中。可按需增删条目。 |
-| `PIPELINE_STEPS` | 绘画流水线步骤定义（高级）。默认内置 8 步，一般无需修改；如需调整各步骤的提示词模板或 ControlNet 权重，可直接编辑该列表。 |
 
 ---
 
 ## 使用指南
 
-### 绘画流水线（8 步骤）
+### 命令列表
 
-每幅完整插图由以下 8 个步骤依次完成，每步的输出图像作为下一步的 ControlNet 条件输入：
-
-| 步骤 | 名称 | 说明 |
-|------|------|------|
-| 1 | `step_1_skeleton` | 最简易骨架/定位线草图：确定人物位置、姿势、视角 |
-| 2 | `step_2_rough_sketch` | 外貌/背景轮廓草图：发型、服装外轮廓、背景要素 |
-| 3 | `step_3_detailed_sketch` | 细化草图：丰富细节，为线稿做准备 |
-| 4 | `step_4_lineart` | 高完成度线稿：精确干净的墨线 |
-| 5 | `step_5_base_color` | 上大块底色：平铺主色调 |
-| 6 | `step_6_refined_color` | 细化色块：补充小范围颜色 |
-| 7 | `step_7_color_blend` | 调色：减弱色块感，增强均匀感 |
-| 8 | `step_8_lighting` | 添加光影效果：完稿 |
-
-**无需手动为每个步骤编写 prompt**——只需在 `SUBJECT_POOL` 中描述最终成品图的要求（如 `"1girl, blue hair, maid outfit, indoor cafe, anime style"`），系统会自动将其注入到各步骤的提示词模板中。
-
-### 自动训练（定时任务）
-
-插件启动后会按 `SCHEDULER_INTERVAL_MINUTES` 设定的间隔自动触发，**仅在 `SCHEDULER_START_HOUR`（含）到 `SCHEDULER_END_HOUR`（含）之间运行**（默认 8:00–23:00），不会在深夜打扰你。
-
-每次触发时，机器人会：
-1. 从 `SUBJECT_POOL` 随机选取一条主题描述（最终成品图要求）。
-2. 依次执行全部 8 个绘画步骤，每步用上一步的结果作为 ControlNet 条件输入。
-3. 将每个步骤的生成图以私聊消息的形式推送给 `SUPERUSER_ID` 指定的用户（共 8 条消息）。
-
-收到图片后，**引用（回复）该图片消息**并发送以下命令进行标注：
-
-| 命令 | 别名 | 效果 |
-|------|------|------|
-| `ok` | `不错`、`保存` | ✅ 批准并归档至训练集，自动追加 `metadata.jsonl` |
-| `pass` | `不行`、`丢弃` | 🗑️ 拒绝，图片移入 rejected 目录 |
-
-> **注意：** 必须以**引用回复**的方式操作，直接发送命令无效。
-
-示例流程：
-```
-[机器人私聊]
-[碎片时间标注] 第一草图（骨架/定位线） (1/8)
-主题: 1girl, blue hair, maid outfit, smiling, indoor cafe background, anime style
-步骤: step_1_skeleton
-Prompt: simple body skeleton, rough position lines, pose composition, 1girl, blue hair …
-[图片]
-回复 [ok] 归档，回复 [pass] 丢弃
-
-… (2/8 到 8/8 同理) …
-
-[用户引用第4张图（线稿）回复]
-ok
-
-[机器人回复]
-✅ 已归档至 step_4_lineart，样本库+1
-```
-
-### 手动绘画
-
-通过以下命令手动触发 AI 绘画并进行交互式精修：
-
-```
-/画画 [prompt]
-/绘画 [prompt]
-```
-
-例如：
-```
-/画画 1girl, blue hair, anime style, clean lineart
-```
-
-交互式精修选项：
-
-| 回复 | 效果 |
+| 命令 | 说明 |
 |------|------|
-| `1` | ✅ 满意，进入下一步骤 |
-| `2` | 🔄 重新生成（使用新随机种子） |
-| `3` | 🎨 精修（保留本次种子，微调参数后重绘） |
+| `/learn <名称> [数量]` | 开始学习新风格，发送指定数量的参考图片 |
+| `/use <名称>` | 切换当前活动风格 |
+| `/list` | 列出所有已学习的风格 |
+| `/draw <描述>` | 启动新的四阶段绘画流水线 |
+| 回复评分 `1-5` | 对当前步骤打分（1-2=重做，3-5=继续） |
+
+### 示例流程
+
+```
+# 1. 学习风格
+/learn miyazaki 3
+[发送3张宫崎骏风格的参考图]
+
+# 2. 切换风格
+/use miyazaki
+
+# 3. 开始绘画
+/draw 1girl, blue hair, maid outfit, anime style
+
+# 机器人发来草图
+> 步骤 1/4: 草图
+> 请回复评分 1-5…
+
+# 用户引用图片回复
+4
+
+# 机器人进入下一步…
+```
 
 ---
 
-## 数据输出
-
-所有数据存放在 `data/ai_trainer/` 目录下：
+## 数据存储
 
 ```
 data/ai_trainer/
-├── pending/                    # 待审核图片（临时目录）
-│   ├── step_1_skeleton/
-│   ├── step_2_rough_sketch/
-│   ├── step_3_detailed_sketch/
-│   ├── step_4_lineart/
-│   ├── step_5_base_color/
-│   ├── step_6_refined_color/
-│   ├── step_7_color_blend/
-│   └── step_8_lighting/
-├── train/                      # 已批准的训练数据
-│   ├── step_1_skeleton/
-│   ├── step_2_rough_sketch/
-│   ├── step_3_detailed_sketch/
-│   ├── step_4_lineart/
-│   ├── step_5_base_color/
-│   ├── step_6_refined_color/
-│   ├── step_7_color_blend/
-│   ├── step_8_lighting/
-│   └── metadata.jsonl          # HuggingFace 兼容格式元数据
-└── rejected/                   # 已拒绝的图片
-```
-
-### `metadata.jsonl` 格式
-
-每条记录为一行 JSON，兼容 HuggingFace `datasets` 库直接加载：
-
-```jsonl
-{"file_name": "step_4_lineart/1718000000_123456789.png", "text": "clean ink lineart, precise clean lines, 1girl, blue hair …", "seed": 123456789, "control_params": {}}
-{"file_name": "step_8_lighting/1718003600_987654321.png", "text": "lighting and shadows, highlights, rim light, shading, 1girl, blue hair …", "seed": 987654321, "control_params": {}}
+├── personas.json          # 已学习的风格人格
+├── pipeline_state.json    # 当前流水线状态
+└── pipeline/
+    └── <user_id>/
+        ├── sketch/
+        ├── lineart/
+        ├── flat_color/
+        └── final_render/
 ```
 
 ---
 
-## 常见问题
+## 工作流 JSON 说明
 
-### 首次启动时机器人长时间无响应
+工作流文件存放于 `workflows/` 目录，可根据实际 ComfyUI 环境修改节点 ID 和参数：
 
-首次运行时，插件会自动从 Hugging Face Hub 下载 Stable Diffusion 1.5 及 ControlNet 模型权重（合计约 **5–8 GB**），视网络环境可能需要数分钟至数十分钟。下载完成后模型会缓存至本地，后续启动不会重复下载。
+- **`workflow_step1.json`**：纯文生图，生成初始草图。
+- **`workflow_img2img.json`**：图生图 + Canny ControlNet，用于线稿、底色、完稿阶段。
+- **`workflow_tagger.json`**：WD14 Tagger，用于分析参考图片标签。
 
-插件会依次尝试以下下载策略，无需任何手动配置：
-
-1. **hf-mirror.com 镜像站**（每个端点最多重试 3 次，带退避等待）
-2. **huggingface.co 官方站**（同样重试 3 次）
-
-若两个端点均失败，会在日志中打印明确的错误信息并指引手动下载。
-
----
-
-### 手动下载模型（网络受限时）
-
-如果自动下载仍然失败，可以通过以下任一方式手动下载模型，并在 `config.py` 中配置本地路径。
-
-#### 方法一：使用 huggingface-cli（推荐）
-
-```bash
-pip install -U huggingface_hub
-
-# 下载 SD 1.5 基础模型（约 4 GB）
-HF_ENDPOINT=https://hf-mirror.com huggingface-cli download \
-    runwayml/stable-diffusion-v1-5 \
-    --local-dir models/stable-diffusion-v1-5
-
-# 下载 ControlNet OpenPose 模型（约 1.5 GB）
-HF_ENDPOINT=https://hf-mirror.com huggingface-cli download \
-    lllyasviel/sd-controlnet-openpose \
-    --local-dir models/sd-controlnet-openpose
-```
-
-> **Windows 用户：** PowerShell 中使用以下等效命令：
-> ```powershell
-> $env:HF_ENDPOINT = "https://hf-mirror.com"
-> huggingface-cli download runwayml/stable-diffusion-v1-5 --local-dir models/stable-diffusion-v1-5
-> huggingface-cli download lllyasviel/sd-controlnet-openpose --local-dir models/sd-controlnet-openpose
-> ```
-> 或在 CMD 中：
-> ```cmd
-> set HF_ENDPOINT=https://hf-mirror.com
-> huggingface-cli download runwayml/stable-diffusion-v1-5 --local-dir models/stable-diffusion-v1-5
-> huggingface-cli download lllyasviel/sd-controlnet-openpose --local-dir models/sd-controlnet-openpose
-> ```
-
-#### 方法二：使用 git-lfs
-
-```bash
-# 前提：已安装 Git LFS（https://git-lfs.github.com）
-git lfs install
-
-# 克隆镜像仓库
-git clone https://hf-mirror.com/runwayml/stable-diffusion-v1-5 models/stable-diffusion-v1-5
-git clone https://hf-mirror.com/lllyasviel/sd-controlnet-openpose models/sd-controlnet-openpose
-```
-
-#### 配置本地路径
-
-将下载好的模型目录路径填入 `config.py`：
-
-```python
-# 支持绝对路径和相对路径（相对于机器人运行目录）
-LOCAL_MODEL_PATH = "models/stable-diffusion-v1-5"
-LOCAL_CONTROLNET_PATH = "models/sd-controlnet-openpose"
-```
-
-填写后重启机器人，插件将直接从本地磁盘加载，完全绕过网络。
-
-### 显存要求
-
-| 配置 | 说明 |
-|------|------|
-| 最低可运行 | 约 4–6 GB 显存（纯推理，模型分块加载） |
-| 推荐配置 | **16 GB 显存**（流畅运行，无性能瓶颈） |
-
-插件在 `engine.py` 中默认调用 `pipeline.enable_model_cpu_offload()`，将 UNet、VAE、文本编码器等子组件按需在 CPU 与 GPU 之间调度，避免模型常驻显存。这使得 4–6 GB 显存的显卡也能运行，但每次推理都有额外的 CPU↔GPU 数据迁移开销，速度较慢。**推荐使用 16 GB 显存**，可在单次推理中将主要组件常驻 GPU，显著提升生成速度。
+> **提示**：如果你的 ComfyUI 中的 checkpoint 或 ControlNet 文件名与 JSON 中不同，请直接编辑对应 JSON 文件中的 `ckpt_name` / `control_net_name` 字段。
