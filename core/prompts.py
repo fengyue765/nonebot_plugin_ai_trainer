@@ -11,6 +11,7 @@ import aiohttp
 from typing import Optional
 
 from ..config import Config
+from ..backend.comfy import comfy_client
 
 # Step-specific prefix templates injected before the user's subject
 _STEP_PREFIXES: dict[str, str] = {
@@ -100,6 +101,9 @@ class PromptEnhancer:
             "Return only the improved prompt — no explanations."
         )
         try:
+            # Free ComfyUI VRAM so Ollama can load its model
+            await comfy_client.unload_models()
+
             payload = {
                 "model": self._ollama_model,
                 "messages": [
@@ -107,6 +111,7 @@ class PromptEnhancer:
                     {"role": "user", "content": prompt},
                 ],
                 "stream": False,
+                "keep_alive": 0,
             }
             async with aiohttp.ClientSession() as session:
                 async with session.post(
