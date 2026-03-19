@@ -27,18 +27,33 @@ class Config:
     PIPELINE_STATE_FILE: str = "data/ai_trainer/pipeline_state.json"
 
     # ------------------------------------------------------------------
+    # 历史记录配置
+    # ------------------------------------------------------------------
+    # 历史记录根目录
+    HISTORY_ROOT: str = "data/ai_trainer/history"
+    # 评分对应的子目录名称
+    SCORE_DIRS: dict = {
+        1: "score_1",
+        2: "score_2", 
+        3: "score_3",
+        4: "score_4",
+        5: "score_5"
+    }
+
+    # ------------------------------------------------------------------
     # 定时任务设置
     # ------------------------------------------------------------------
     # 每隔多少小时推进一次流水线步骤（推荐 2 小时）
-    SCHEDULER_INTERVAL_HOURS: int = 1
+    # SCHEDULER_INTERVAL_HOURS: int = 1
     # 任务允许运行的起始小时（含），24 小时制
-    SCHEDULER_START_HOUR: int = 8
+    # SCHEDULER_START_HOUR: int = 8
     # 任务允许运行的结束小时（含），24 小时制
-    SCHEDULER_END_HOUR: int = 18
+    # SCHEDULER_END_HOUR: int = 18
 
     # ------------------------------------------------------------------
     # 四阶段流水线步骤名称
     # ------------------------------------------------------------------
+    """
     PIPELINE_STEPS: list = [
         "sketch",
         "lineart",
@@ -53,3 +68,4 @@ class Config:
         "flat_color": "底色",
         "final_render": "完稿",
     }
+"""
