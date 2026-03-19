@@ -3,7 +3,7 @@
     "class_type": "CheckpointLoaderSimple",
     "_meta": { "title": "Load Checkpoint" },
     "inputs": {
-      "ckpt_name": "v1-5-pruned-emaonly.safetensors"
+      "ckpt_name": "ponyDiffusionV6XL_v6StartWithThisOne.safetensors"
     }
   },
   "2": {

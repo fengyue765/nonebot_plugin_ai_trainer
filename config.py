@@ -3,7 +3,7 @@
 
 class Config:
     # !! 必须修改：请替换为你的实际 QQ 号 !!
-    SUPERUSER_ID: str = "123456789"
+    SUPERUSER_ID: str = "3052246120"
 
     # ------------------------------------------------------------------
     # 后端服务地址
@@ -13,7 +13,7 @@ class Config:
     # Ollama API 地址
     OLLAMA_URL: str = "http://127.0.0.1:11434"
     # Ollama 使用的模型
-    OLLAMA_MODEL: str = "dolphin-llama3"
+    OLLAMA_MODEL: str = "dolphin-llama3:8b"
     # Ollama API 调用超时（秒）
     OLLAMA_TIMEOUT: int = 60
 
@@ -30,11 +30,11 @@ class Config:
     # 定时任务设置
     # ------------------------------------------------------------------
     # 每隔多少小时推进一次流水线步骤（推荐 2 小时）
-    SCHEDULER_INTERVAL_HOURS: int = 2
+    SCHEDULER_INTERVAL_HOURS: int = 1
     # 任务允许运行的起始小时（含），24 小时制
     SCHEDULER_START_HOUR: int = 8
     # 任务允许运行的结束小时（含），24 小时制
-    SCHEDULER_END_HOUR: int = 23
+    SCHEDULER_END_HOUR: int = 18
 
     # ------------------------------------------------------------------
     # 四阶段流水线步骤名称

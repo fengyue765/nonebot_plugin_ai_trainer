@@ -16,24 +16,84 @@ from ..backend.comfy import comfy_client
 # Step-specific prefix templates injected before the user's subject
 _STEP_PREFIXES: dict[str, str] = {
     "sketch": (
-        "rough pencil sketch, simple pose composition, basic shapes, "
-        "gesture lines, minimal detail, "
+        "anime rough sketch, manga draft, Japanese animation style sketch, "
+        "simple clean construction lines, rough pose sketch, basic shapes, "
+        "light construction lines, quick gesture sketch, minimal detail, "
+        "black and white, white background, hand-drawn anime style, "
+        "shojo manga sketch, shonen manga rough draft, "
+        "anime character draft, rough composition sketch, "
+        "no shading, no rendering, "
     ),
+    
     "lineart": (
-        "clean ink lineart, precise lines, no color, high detail linework, "
+        "anime clean lineart, manga ink lines, Japanese animation lineart, "
+        "crisp clean lines, precise ink work, professional line weight, "
+        "black lines on white, celtic lines, sharp outlines, "
+        "no color, no shading, no grayscale, clean line art, "
+        "manga style linework, anime illustration lines, "
+        "contour lines, varied line thickness, "
     ),
+    
     "flat_color": (
-        "flat base colors, large color blocks, anime flat shading, "
-        "simple coloring, "
+        "anime flat colors, manga style coloring, Japanese animation colors, "
+        "cel shading, base colors, solid color blocks, flat shading, "
+        "anime style color fill, simple shading, no gradients, "
+        "clean color separation, vector flat style, graphic style, "
+        "bright anime colors, character design colors, "
     ),
+    
     "final_render": (
-        "masterpiece quality, lighting and shadows, highlights, rim light, "
-        "soft gradients, polished rendering, "
+        "score_9, score_8_up, score_7_up, score_6_up, score_5_up, score_4_up, "
+        "source_anime, anime style, manga style, Japanese animation, "
+        "masterpiece quality, best quality, high quality, highly detailed, "
+        "professional lighting, cinematic lighting, dynamic shading, "
+        "detailed rendering, vibrant anime colors, clean lines, "
+        "beautiful character illustration, trending on Pixiv, "
+        "anime key visual, digital anime art, "
     ),
 }
 
-_DEFAULT_NEGATIVE = "lowres, blurry, bad anatomy, worst quality, extra limbs"
+_STEP_NEGATIVES: dict[str, str] = {
+    "sketch": (
+        "western comic style, American comic, Marvel, DC, realistic, "
+        "detailed rendering, shading, shadows, lighting, colors, painting, "
+        "3d, photorealistic, intricate, polished, finished, "
+        "background, complex, ornate, "
+    ),
+    
+    "lineart": (
+        "western comic, American manga, realistic, shading, shadows, "
+        "lighting, rendering, colors, painting, blurry, sketchy, messy, "
+        "dirty lines, grayscale, halftone, textures, 3d, photorealistic, "
+        "watercolor, oil painting, "
+    ),
+    
+    "flat_color": (
+        "western style, realistic lighting, complex shading, gradients, "
+        "soft shading, detailed rendering, intricate textures, "
+        "ambient occlusion, subsurface scattering, photorealistic, 3d render, "
+        "oil painting, impressionism, blurry, hdr, "
+    ),
+    
+    "final_render": (
+        "score_4, score_3, score_2, score_1, score_0, text, watermark, "
+        "ugly, worst quality, low quality, normal quality, bad anatomy, "
+        "bad hands, missing fingers, extra fingers, extra limbs, "
+        "fused fingers, deformed hands, malformed limbs, blurry, grainy, "
+        "noisy, pixelated, low resolution, signature, artist name, "
+        "western comic, American comic, realistic, photorealistic, "
+    ),
+}
 
+_DEFAULT_NEGATIVE = (
+    "score_4, score_3, score_2, score_1, score_0, text, watermark, "
+    "ugly, worst quality, low quality, normal quality, bad anatomy, "
+    "bad hands, missing fingers, extra fingers, extra limbs, "
+    "fused fingers, deformed hands, malformed limbs, blurry, grainy, "
+    "noisy, pixelated, low resolution, signature, username, artist name, "
+    "text, letters, words, logo, title, caption, date, "
+    "western comic style, American comic, realistic, 3d, photorealistic, "
+)
 
 class PromptEnhancer:
     """Builds prompts for each pipeline step, with optional Ollama refinement."""
@@ -76,12 +136,19 @@ class PromptEnhancer:
         # Assemble base positive prompt
         parts = [p for p in (prefix, persona_positive, user_input) if p]
         positive = ", ".join(parts)
-        negative = persona_negative or _DEFAULT_NEGATIVE
+        # 获取当前步骤的专属负面词
+        step_negative = _STEP_NEGATIVES.get(step, "")
+        
+        # 获取通用的负面词
+        base_negative = persona_negative or _DEFAULT_NEGATIVE
+        
+        # 合并两者
+        final_negative = f"{step_negative}, {base_negative}" if step_negative else base_negative
 
         if refine:
             positive = await self._refine_with_ollama(step, positive)
 
-        return positive, negative
+        return positive, final_negative
 
     # ------------------------------------------------------------------
     # Ollama refinement
@@ -97,8 +164,9 @@ class PromptEnhancer:
             "in anime illustration. "
             f"The current pipeline step is: {step}. "
             "Improve the following prompt to be more effective for this step. "
-            "Keep it concise (under 100 words). "
-            "Return only the improved prompt — no explanations."
+            "Keep it concise. "
+            "Return only the improved tags — no explanations."
+            "IMPORTANT: List at least 15 tags for POSITIVE, separated by commas.\n"
         )
         try:
             # Free ComfyUI VRAM so Ollama can load its model

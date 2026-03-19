@@ -141,10 +141,11 @@ class PersonaManager:
         system_prompt = (
             "You are an expert in anime art styles. "
             "Given a set of image tags, extract the artist's core style.\n"
+            "IMPORTANT: List at least 15 tags for POSITIVE, separated by commas.\n"
             "Reply with exactly three lines:\n"
             "POSITIVE: <comma-separated positive style tags>\n"
             "NEGATIVE: <comma-separated negative/avoid tags>\n"
-            "DESCRIPTION: <one-sentence description of the style>"
+            "DESCRIPTION: <one-sentence description of the style, as short as possible>"
         )
         user_prompt = f"Image tags: {tags}"
 

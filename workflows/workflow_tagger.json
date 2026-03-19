@@ -12,9 +12,11 @@
     "_meta": { "title": "WD14 Tagger" },
     "inputs": {
       "image": ["1", 0],
-      "model": "wd-v1-4-moat-tagger-v2",
+      "model": "wd-v1-4-convnextv2-tagger-v2",
       "threshold": 0.35,
       "character_threshold": 0.85,
+      "replace_underscore": false,
+      "trailing_comma": false,
       "exclude_tags": ""
     }
   }

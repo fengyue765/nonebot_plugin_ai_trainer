@@ -157,6 +157,12 @@ score_matcher = on_message(priority=1, block=False)
 
 @score_matcher.handle()
 async def _handle_score(matcher: Matcher, event: MessageEvent) -> None:
+    
+    # --- DEBUG START ---
+    print(f"[DEBUG] _handle_score triggered by user: {event.get_user_id()}")
+    print(f"[DEBUG] Message content: {event.get_plaintext()}")
+    # --- DEBUG END ---
+
     if not _is_superuser(event):
         await matcher.finish()
 
@@ -168,6 +174,11 @@ async def _handle_score(matcher: Matcher, event: MessageEvent) -> None:
     if ref_id not in _score_queue:
         await matcher.finish()
 
+    # --- DEBUG START ---
+    print(f"[DEBUG] Reply Ref ID: {ref_id}")
+    print(f"[DEBUG] Current Score Queue keys: {list(_score_queue.keys())}")
+    # --- DEBUG END ---
+
     text = event.get_plaintext().strip()
     if text not in ("1", "2", "3", "4", "5"):
         await matcher.finish()
@@ -175,12 +186,21 @@ async def _handle_score(matcher: Matcher, event: MessageEvent) -> None:
     score = int(text)
     user_id = _score_queue.pop(ref_id)
 
+    # --- DEBUG START ---
+    print(f"[DEBUG] Valid score: {score} from user {user_id}")
+    # --- DEBUG END ---
+
     try:
         bot = get_bot()
     except Exception:
         await matcher.finish()
 
     state = pipeline_manager.get_state(user_id)
+    # --- DEBUG START ---
+    print(f"[DEBUG] Pipeline state for user {user_id}: {state}")
+    if state:
+        print(f"[DEBUG] Current step: {state.current_step}")
+    # --- DEBUG END ---
     if not state:
         await matcher.finish("当前没有进行中的流水线。")
 
