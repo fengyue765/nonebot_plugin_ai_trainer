@@ -1,4 +1,4 @@
-"""Prompt enhancer (simplified for single-step generation with deduplication and random perturbations)."""
+"""Prompt enhancer for Yuri (girls' love) illustration generation with dual character fusion."""
 
 import aiohttp
 import random
@@ -30,6 +30,105 @@ _FIXED_NEGATIVE = (
     "text, letters, words, logo, title, caption, date, "
     "western comic style, American comic, realistic, 3d, photorealistic"
 )
+
+# ========== 男性相关词汇（用于负面提示词）==========
+_MALE_RELATED_TAGS = [
+    # 基本男性称谓
+    "male", "man", "men", "boy", "boys", "guy", "guys", "gentleman",
+    "males", "male focus", "solo male",
+    
+    # 男性年龄/阶段
+    "young man", "old man", "middle-aged man", "teenage boy", "adult male",
+    "shota", "shouta",
+    
+    # 男性身体特征
+    "muscular", "muscles", "abs", "six-pack", "pecs", "biceps",
+    "broad shoulders", "chest hair", "facial hair", "beard", "mustache",
+    "stubble", "goatee", "sideburns",
+    
+    # 男性发型
+    "short hair male", "male haircut", "undercut male", "man bun",
+    "bald male", "bald man", "shaved head",
+    
+    # 男性服装
+    "suit male", "tuxedo", "male uniform", "male school uniform",
+    "male gakuran", "male kimono", "male yukata",
+    
+    # 男性角色类型
+    "bishounen", "bishonen", "ikemen", "ojisan", "ojii-san",
+    "otoko", "dansei",
+    
+    # 男性职业/身份
+    "salaryman", "butler male", "priest male", "teacher male", "student male",
+    
+    # 男性向/男性视角
+    "male pov", "male perspective", "male gaze", "selfie male", "male selfie",
+    
+    # 父子/男性关系
+    "father", "dad", "daddy", "papa", "son", "brother", "grandfather", "grandpa",
+    "uncle", "nephew", "cousin male",
+    
+    # 男性群体
+    "multiple males", "group of men", "all male", "male only",
+    "boys club", "male harem", "reverse harem",
+    
+    # 男性性器官
+    "penis", "cock", "dick", "phallus", "balls", "testicles", "scrotum",
+    "male genitalia", "manhood", "erection", "erect", "hard-on", "boner",
+    "sperm", "semen", "cum", "ejaculate", "precum", "pre-cum",
+    "male pubic hair", "man pubic hair",
+    
+    # 男性 NSFW
+    "cum on male", "male ejaculation", "male orgasm", "male cum",
+    "sperm on face", "cum on body male", "male creampie",
+    "male masturbation", "male fingering", "male handjob",
+    "male receiving blowjob", "male giving blowjob",
+    "male on top", "male dominant", "male submissive",
+    "male x male", "mmf", "mm threesome", "male couple",
+    "yaoi", "boys love", "bl", "shounen ai", "bara",
+    "seme", "uke", "male kiss", "male kissing", "male hugging",
+    "male nudity", "male naked", "male nude", "bulge", "male bulge",
+    "tent", "visible bulge", "male underwear", "male boxers",
+    "male briefs", "male stripping", "male strip",
+    "male bound", "male bondage", "male tied", "male collar",
+    "male slave", "male master", "father son", "dad son",
+    "incest male", "family male", "relatives male",
+    "sexy male", "hot male", "handsome male",
+    "male seductive", "male provocative"
+]
+
+_MALE_NEGATIVE = ", ".join(_MALE_RELATED_TAGS)
+
+# ========== 百合题材专属提示词 ==========
+
+# 百合关系描述词库
+_YURI_RELATIONSHIP_MODIFIERS = [
+    "yuri", "girls love", "shoujo ai", "yuri couple",
+    "two girls", "intimate", "close relationship", "affectionate",
+    "gazing at each other", "holding hands", "embrace", "hug",
+    "cuddling", "snuggling", "touching foreheads", "nuzzling"
+]
+
+# 百合氛围词库
+_YURI_ATMOSPHERE_MODIFIERS = [
+    "romantic atmosphere", "tender moment", "gentle mood", "warm feeling",
+    "peaceful", "calm", "intimate atmosphere", "affectionate mood",
+    "blooming love", "spring feeling", "sweet moment"
+]
+
+# 百合互动场景词库
+_YURI_INTERACTION_MODIFIERS = [
+    "face to face", "close together", "leaning on each other",
+    "cheek to cheek", "foreheads touching", "nose to nose",
+    "mutual affection", "loving gaze", "tender gaze"
+]
+
+# 所有百合修饰词合并
+_YURI_MODIFIERS = {
+    "relationship": _YURI_RELATIONSHIP_MODIFIERS,
+    "atmosphere": _YURI_ATMOSPHERE_MODIFIERS,
+    "interaction": _YURI_INTERACTION_MODIFIERS
+}
 
 # ========== 二次元风格随机扰动词库 ==========
 
@@ -155,6 +254,43 @@ def _deduplicate_tags(tags_str: str) -> str:
     
     return ", ".join(unique_tags)
 
+def _add_yuri_modifiers(tags_str: str, intensity: float = 0.5) -> str:
+    """
+    向提示词添加百合题材的随机修饰词
+    """
+    if not tags_str:
+        return tags_str
+    
+    selected_modifiers = []
+    
+    # 百合必选类别
+    core_categories = ["relationship", "atmosphere"]
+    for category in core_categories:
+        modifiers = _YURI_MODIFIERS[category]
+        if random.random() < intensity * 1.2:
+            num_to_add = random.randint(1, min(2, len(modifiers)))
+            selected = random.sample(modifiers, num_to_add)
+            selected_modifiers.extend(selected)
+            print(f"[DEBUG] 从百合类别 {category} 添加修饰词: {selected}")
+    
+    # 百合可选类别
+    optional_categories = ["interaction"]
+    for category in optional_categories:
+        modifiers = _YURI_MODIFIERS[category]
+        if random.random() < intensity * 0.8:
+            num_to_add = random.randint(1, min(2, len(modifiers)))
+            selected = random.sample(modifiers, num_to_add)
+            selected_modifiers.extend(selected)
+            print(f"[DEBUG] 从百合类别 {category} 添加修饰词: {selected}")
+    
+    if selected_modifiers:
+        random.shuffle(selected_modifiers)
+        modifiers_str = ", ".join(selected_modifiers)
+        result = f"{tags_str}, {modifiers_str}"
+        print(f"[DEBUG] 添加了 {len(selected_modifiers)} 个百合题材修饰词")
+        return result
+    
+    return tags_str
 
 def _add_anime_modifiers(tags_str: str, intensity: float = 0.4) -> str:
     """
@@ -222,11 +358,11 @@ def _random_permute_tags(tags_str: str, permute_prob: float = 0.2) -> str:
     # 分割标签
     tags = [tag.strip() for tag in tags_str.split(",") if tag.strip()]
     
-    if len(tags) <= 3:  # 标签太少就不重新排列
+    if len(tags) <= 5:  # 标签太少就不重新排列
         return tags_str
     
     # 固定前缀词（前几个重要的标签保持不变）
-    fixed_count = min(3, len(tags))
+    fixed_count = min(5, len(tags))
     fixed_tags = tags[:fixed_count]
     rest_tags = tags[fixed_count:]
     
@@ -292,127 +428,164 @@ def _random_weight_tags(tags_str: str, weight_prob: float = 0.15) -> str:
 
 
 class PromptEnhancer:
-    """Builds final prompts for single-step generation using fixed templates + persona + user input."""
-
     def __init__(
         self,
         ollama_url: str = Config.OLLAMA_URL,
         ollama_model: str = Config.OLLAMA_MODEL,
-        perturbation_intensity: float = 0.4,  # 默认扰动强度40%
+        yuri_intensity: float = 0.5,
+        style_intensity: float = 0.2,  # 降低风格强度，突出角色
     ) -> None:
         self._ollama_url = ollama_url.rstrip("/")
         self._ollama_model = ollama_model
-        self.perturbation_intensity = perturbation_intensity
+        self.yuri_intensity = yuri_intensity
+        self.style_intensity = style_intensity
 
-    # ------------------------------------------------------------------
-    # Public interface
-    # ------------------------------------------------------------------
+    def _split_character_tags(self, positive_prompt: str) -> List[str]:
+        """将角色特征标签分割成独立标签，便于单独加权"""
+        if not positive_prompt:
+            return []
+        return [tag.strip() for tag in positive_prompt.split(",") if tag.strip()]
+
+    def _weight_character_tags(self, tags: List[str], weight: float = 1.3) -> List[str]:
+        """为每个角色特征标签单独添加权重"""
+        weighted = []
+        for tag in tags:
+            if ":" not in tag and "(" not in tag:
+                weighted.append(f"({tag}:{weight})")
+            else:
+                weighted.append(tag)
+        return weighted
+
+    def fuse_character_prompts(
+        self, 
+        persona1: Optional[dict], 
+        persona2: Optional[dict],
+        weight: float = 1.3  # 角色特征权重
+    ) -> Tuple[str, str]:
+        """
+        融合两个角色的固定特征提示词，并强化角色特征
+        
+        Args:
+            persona1: 第一个角色的人格
+            persona2: 第二个角色的人格
+            weight: 角色特征的权重值 (1.2-1.5)
+        
+        Returns:
+            (融合后的正面词, 融合后的负面词)
+        """
+        positive_parts = []
+        negative_parts = []
+        
+        # 提取两个角色的正面特征，并为每个特征单独加权
+        if persona1 and persona1.get("positive_prompt"):
+            tags = self._split_character_tags(persona1["positive_prompt"])
+            weighted_tags = self._weight_character_tags(tags, weight)
+            positive_parts.append(", ".join(weighted_tags))
+        
+        if persona2 and persona2.get("positive_prompt"):
+            # 如果角色2与角色1相同，使用相同的权重
+            tags = self._split_character_tags(persona2["positive_prompt"])
+            weight2 = weight if persona1 == persona2 else weight
+            weighted_tags = self._weight_character_tags(tags, weight2)
+            positive_parts.append(", ".join(weighted_tags))
+        
+        # 如果没有角色档案，使用默认描述（不加权重）
+        if not positive_parts:
+            positive_parts.append("1girl, beautiful, cute")
+            positive_parts.append("another girl, beautiful, cute")
+            # 为双人指示添加权重
+            fused_positive = f"(2girls:{weight}), {', '.join(positive_parts)}"
+        else:
+            # 为双人指示添加权重，并确保角色特征在提示词开头
+            fused_positive = f"(2girls:{weight}), {', '.join(positive_parts)}"
+        
+        # 融合负面词
+        if persona1 and persona1.get("negative_prompt"):
+            negative_parts.append(persona1["negative_prompt"])
+        if persona2 and persona2.get("negative_prompt"):
+            negative_parts.append(persona2["negative_prompt"])
+        
+        fused_negative = ", ".join(negative_parts) if negative_parts else ""
+        
+        return fused_positive, fused_negative
 
     async def build_prompt(
         self,
         user_input: str,
         persona: Optional[dict] = None,
+        persona2: Optional[dict] = None,
         refine: bool = False,
-        use_perturbation: bool = True,
-        nsfw_allowed: bool = False,  # 是否允许 NSFW
+        use_yuri_modifiers: bool = True,
+        use_style_modifiers: bool = True,
+        nsfw_allowed: bool = False,
+        character_weight: float = 1.3,  # 角色特征权重
     ) -> tuple[str, str]:
-        """Build (positive, negative) prompts for final generation.
-
-        提示词构建流程：
-        1. 基础组合：固定前缀 + 角色档案正面词 + 用户输入
-        2. 随机扰动：添加随机修饰词、重新排列、添加权重
-        3. 去重处理：移除重复标签
-        4. NSFW过滤：最后执行过滤（男性词始终过滤，其他NSFW词根据nsfw_allowed决定）
-
-        Args:
-            user_input: The raw user-provided description.
-            persona:    Optional persona dict with positive_prompt.
-            refine:     Kept for compatibility but not used.
-            use_perturbation: Whether to add random perturbations.
-            nsfw_allowed: Whether NSFW content is allowed.
-
-        Returns:
-            (positive_prompt, negative_prompt) tuple.
         """
-        # 获取角色档案中的正面提示词
-        persona_positive = persona["positive_prompt"] if persona else ""
+        构建百合插画提示词，强化角色特征
         
-        # ===== 第1步：基础组合 =====
+        Args:
+            character_weight: 角色特征权重 (1.2-1.5 推荐)
+        """
+        # 第1步：融合角色特征（强化权重）
+        fused_positive, fused_negative = self.fuse_character_prompts(
+            persona, persona2, weight=character_weight
+        )
+        
+        # 第2步：基础组合
         positive_parts = []
         
-        # 添加固定前缀
+        # 角色特征放在最前面（最重要）
+        if fused_positive:
+            positive_parts.append(fused_positive)
+        
+        # 添加固定前缀（放在角色特征之后）
         if _FINAL_PROMPT_PREFIX:
             positive_parts.append(_FINAL_PROMPT_PREFIX)
-        
-        # 添加角色档案正面词
-        if persona_positive:
-            positive_parts.append(persona_positive)
         
         # 添加用户输入
         if user_input:
             positive_parts.append(user_input)
         
-        # 用逗号连接所有部分
         positive = ", ".join(positive_parts)
         
-        # ===== 第2步：随机扰动 =====
-        if use_perturbation:
-            print(f"[DEBUG] ===== 开始应用二次元风格随机扰动 =====")
-            print(f"[DEBUG] 扰动强度: {self.perturbation_intensity}")
-            
-            # 1. 添加二次元风格修饰词
-            positive = _add_anime_modifiers(positive, intensity=self.perturbation_intensity)
-            
-            # 2. 随机重新排列部分标签
-            positive = _random_permute_tags(positive, permute_prob=self.perturbation_intensity * 0.5)
-            
-            # 3. 随机为部分重要标签添加权重
-            positive = _random_weight_tags(positive, weight_prob=self.perturbation_intensity * 0.4)
-            
-            print(f"[DEBUG] ===== 随机扰动应用完成 =====")
-
-        # ===== 第3步：去重处理 =====
+        # 第3步：添加百合题材修饰词（降低强度，避免干扰角色）
+        if use_yuri_modifiers:
+            positive = _add_yuri_modifiers(positive, intensity=self.yuri_intensity * 0.8)
+        
+        # 第4步：添加二次元风格修饰词（降低强度）
+        if use_style_modifiers:
+            positive = _add_anime_modifiers(positive, intensity=self.style_intensity)
+        
+        # 第5步：随机扰动（只排列非角色特征部分）
+        positive = _random_permute_tags(positive, permute_prob=0.15)
+        
+        # 第6步：为重要角色特征添加权重
+        positive = _random_weight_tags(positive, weight_prob=0.2)
+        
+        # 第7步：去重处理
         positive = _deduplicate_tags(positive)
         
-        # ===== 第4步：NSFW过滤（最后执行） =====
+        # 第8步：NSFW过滤（移除男性相关词汇）
         positive, filtered_tags = nsfw_filter.filter_prompt(positive, nsfw_allowed)
-        
-        # 如果有标签被过滤，记录日志
         if filtered_tags:
             print(f"[DEBUG] NSFW过滤: 移除了 {len(filtered_tags)} 个标签")
 
-        # ===== 负面提示词：固定负面词 =====
-        final_negative = _FIXED_NEGATIVE
+        # ===== 负面提示词：固定负面词 + 男性相关词汇 + 角色负面词 =====
+        negative_parts = [_FIXED_NEGATIVE, _MALE_NEGATIVE]
+        if fused_negative:
+            negative_parts.append(fused_negative)
+        final_negative = ", ".join(negative_parts)
 
-        # 添加调试信息
-        # print(f"[DEBUG] ===== PromptEnhancer.build_prompt =====")
-        # print(f"[DEBUG]   固定前缀: {_FINAL_PROMPT_PREFIX[:50]}...")
-        # print(f"[DEBUG]   角色正面: {persona_positive[:50] if persona_positive else '无'}")
-        # print(f"[DEBUG]   用户输入: {user_input[:50]}...")
-        # print(f"[DEBUG]   扰动强度: {self.perturbation_intensity if use_perturbation else '禁用'}")
-        # print(f"[DEBUG]   NSFW允许: {nsfw_allowed}")
-        # print(f"[DEBUG]   最终正面词: {positive[:100]}...")
-        # print(f"[DEBUG] ======================================")
+        print(f"[DEBUG] ===== PromptEnhancer.build_prompt =====")
+        print(f"[DEBUG]   角色1特征: {persona['positive_prompt'][:50] if persona else '无'}")
+        print(f"[DEBUG]   角色2特征: {persona2['positive_prompt'][:50] if persona2 else '同角色1'}")
+        print(f"[DEBUG]   角色权重: {character_weight}")
+        print(f"[DEBUG]   用户输入: {user_input[:50]}...")
+        print(f"[DEBUG]   NSFW允许: {nsfw_allowed}")
+        print(f"[DEBUG]   最终正面词: {positive[:150]}...")
+        print(f"[DEBUG] ======================================")
 
         return positive, final_negative
 
-    # ------------------------------------------------------------------
-    # 扰动强度控制
-    # ------------------------------------------------------------------
 
-    def set_perturbation_intensity(self, intensity: float) -> None:
-        """设置随机扰动强度 (0.0-1.0)"""
-        self.perturbation_intensity = max(0.0, min(1.0, intensity))
-        print(f"[DEBUG] 扰动强度已设置为: {self.perturbation_intensity}")
-
-    # ------------------------------------------------------------------
-    # Ollama refinement (disabled)
-    # ------------------------------------------------------------------
-
-    async def _refine_with_ollama(self, prompt: str) -> str:
-        """Ollama refinement is disabled. Returns original prompt."""
-        return prompt
-
-
-# Module-level singleton
-prompt_enhancer = PromptEnhancer(perturbation_intensity=0.4)
+prompt_enhancer = PromptEnhancer(yuri_intensity=0.5, style_intensity=0.2)

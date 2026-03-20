@@ -365,17 +365,43 @@ class ComfyClient:
         Returns:
             Comma-separated tag string produced by the tagger.
         """
+        # 验证图片数据
+        if not image_bytes or len(image_bytes) < 100:
+            print(f"[DEBUG] 图片数据无效，大小: {len(image_bytes) if image_bytes else 0} 字节")
+            return ""
+        
+        # 检查是否是 PNG 格式
+        if image_bytes[:8] != b'\x89PNG\r\n\x1a\n':
+            print(f"[DEBUG] 图片不是 PNG 格式，尝试转换")
+            try:
+                from PIL import Image
+                import io
+                img = Image.open(io.BytesIO(image_bytes))
+                # 转换为 PNG
+                output = io.BytesIO()
+                img.save(output, format='PNG')
+                image_bytes = output.getvalue()
+                print(f"[DEBUG] 图片已转换为 PNG，大小: {len(image_bytes)} 字节")
+            except Exception as e:
+                print(f"[DEBUG] 图片转换失败: {e}")
+                return ""
+        
         workflow = await _load_workflow("workflow_tagger.json")
 
-        server_filename = await self.upload_image(image_bytes, "tagger_input.png")
+        try:
+            server_filename = await self.upload_image(image_bytes, "tagger_input.png")
+            print(f"[DEBUG] 图片上传成功: {server_filename}")
+        except Exception as e:
+            print(f"[DEBUG] 图片上传失败: {e}")
+            return ""
 
         for node in workflow.values():
             if node.get("class_type") == "LoadImage":
                 node["inputs"]["image"] = server_filename
 
         prompt_id = await self.queue_prompt(workflow)
+        print(f"[DEBUG] Tagger 工作流已提交: {prompt_id}")
 
-        # The tagger stores its output in history rather than image files
         try:
             async with aiohttp.ClientSession() as session:
                 # Wait for completion
@@ -391,23 +417,29 @@ class ComfyClient:
                                     and data.get("data", {}).get("node") is None
                                     and data.get("data", {}).get("prompt_id") == prompt_id
                                 ):
+                                    print(f"[DEBUG] Tagger 执行完成")
                                     break
 
+                # 获取结果
                 async with session.get(
                     f"{self.http_url}/history/{prompt_id}"
                 ) as resp:
                     resp.raise_for_status()
                     history = await resp.json()
+                    print(f"[DEBUG] 历史记录: {history}")
 
                 prompt_data = history.get(prompt_id, {})
                 for node_output in prompt_data.get("outputs", {}).values():
                     tags = node_output.get("tags")
                     if tags:
-                        return tags if isinstance(tags, str) else ", ".join(tags)
+                        result = tags if isinstance(tags, str) else ", ".join(tags)
+                        print(f"[DEBUG] 提取到标签: {result[:100]}...")
+                        return result
 
                 return ""
         except Exception as exc:
-            raise RuntimeError(f"get_image_tags failed: {exc}") from exc
+            print(f"[DEBUG] get_image_tags 失败: {exc}")
+            return ""
 
 
 # Module-level singleton

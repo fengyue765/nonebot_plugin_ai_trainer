@@ -73,6 +73,14 @@ class PersonaManager:
     def get_persona(self, name: str) -> Optional[dict]:
         return self._data["personas"].get(name)
 
+    # 在 list_personas 方法之后添加
+    def get_persona_name(self, persona: dict) -> Optional[str]:
+        """根据 persona 对象获取名称"""
+        for name, p in self._data["personas"].items():
+            if p == persona:
+                return name
+        return None
+
     # ------------------------------------------------------------------
     # Mutations
     # ------------------------------------------------------------------
@@ -139,15 +147,27 @@ class PersonaManager:
         Falls back to a basic extraction if the API call fails.
         """
         system_prompt = (
-            "You are an expert in anime art styles. "
-            "Given a set of image tags, extract the artist's core style.\n"
-            "IMPORTANT: List at least 15 tags for POSITIVE, separated by commas.\n"
+            "You are an expert in anime character design and character sheet analysis.\n"
+            "Your task is to extract ONLY the character's FIXED FEATURES from the given tags.\n\n"
+            "FIXED FEATURES include:\n"
+            "- Physical appearance: hair color (blonde, black, white, etc.), hair style (long hair, ponytail, twin tails, etc.)\n"
+            "- Eye color and shape: blue eyes, red eyes, closed eyes, etc.\n"
+            "- Body features: large breasts, petite, tall, etc.\n"
+            "- Clothing style: school uniform, maid outfit, kimono, casual wear, etc. (general style, not specific poses)\n"
+            "- Accessories: hair ribbon, earrings, glasses, gloves, hat, necklace, etc.\n"
+            "- Skin features: blush, freckles, beauty mark, etc.\n\n"
+            "DO NOT include:\n"
+            "- Actions/poses: sitting, standing, running, spread legs, etc.\n"
+            "- Scenes/backgrounds: outdoors, indoors, forest, classroom, etc.\n"
+            "- Emotions/expressions: smiling, angry, crying, etc.\n"
+            "- Lighting/effects: backlighting, sparkles, etc.\n"
+            "- Camera angles: from above, close-up, etc.\n\n"
             "Reply with exactly three lines:\n"
-            "POSITIVE: <comma-separated positive style tags>\n"
-            "NEGATIVE: <comma-separated negative/avoid tags>\n"
-            "DESCRIPTION: <one-sentence description of the style, as short as possible>"
+            "POSITIVE: <comma-separated fixed feature tags ONLY>\n"
+            "NEGATIVE: <comma-separated tags to avoid (optional)>\n"
+            "DESCRIPTION: <one-sentence description of the character design, as short as possible>"
         )
-        user_prompt = f"Image tags: {tags}"
+        user_prompt = f"Extract fixed character features from these tags: {tags}"
 
         try:
             # Free ComfyUI VRAM so Ollama can load its model
